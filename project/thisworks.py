@@ -91,8 +91,8 @@ def prepare_test_sequences(ais_test, ais_train, features, sequence_length, scale
         vessel_history['day_cos'] = np.cos(2 * np.pi * vessel_history['day_of_week'] / 7)
     
         # Handle missing values
-        vessel_history[features] = vessel_history[features].fillna(method='ffill').fillna(0)
-    
+        vessel_history[features] = vessel_history[features].ffill().fillna(0)
+
         # Normalize features using the same scaler
         vessel_history[features] = scaler.transform(vessel_history[features])
         
