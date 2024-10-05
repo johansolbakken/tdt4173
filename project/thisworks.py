@@ -6,6 +6,7 @@ from geopy.distance import geodesic
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense
 from sklearn.model_selection import train_test_split
+import tensorflow as tf
 
 def calculate_distance(lat1, lon1, lat2, lon2):
     return geodesic((lat1, lon1), (lat2, lon2)).kilometers
@@ -131,7 +132,7 @@ def main() -> None:
     model.summary()
 
     # Train the model
-    model.fit(X_train, y_train, epochs=1, validation_data=(X_val, y_val))
+    model.fit(X_train, y_train, epochs=10, validation_data=(X_val, y_val))
 
     # Evaluate on validation set
     predictions_val = model.predict(X_val)
