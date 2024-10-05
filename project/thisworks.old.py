@@ -1,8 +1,8 @@
 import pandas as pd
 import numpy as np
 from geopy.distance import geodesic
-from keras.models import Sequential
-from keras.layers import LSTM, Dense
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense
 from sklearn.model_selection import train_test_split
 import tensorflow as tf
 
@@ -67,6 +67,20 @@ def prepare_test_data(ais_test, vessels, vessel_type_categories):
     return merged_test, features
 
 def main() -> None:
+    print("TensorFlow version:", tf.__version__)
+
+    physical_devices = tf.config.list_physical_devices()
+    print("Physical devices:", physical_devices)
+
+    gpus = tf.config.list_physical_devices('GPU')
+    if gpus:
+        print("TensorFlow is using the following GPU(s):")
+        for gpu in gpus:
+            print("\t" + str(gpu))
+    else:
+        print("No GPU found. TensorFlow will use the CPU.")
+
+
     # Load AIS and optional datasets
     ais_train = pd.read_csv('ais_train.csv', sep='|')
     ais_test = pd.read_csv('ais_test.csv')  # Removed sep parameter
