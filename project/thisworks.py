@@ -5,7 +5,7 @@ from typing import Optional
 from geopy.distance import geodesic
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense
-from sklearn.model_selection import train_test_split   main()
+from sklearn.model_selection import train_test_split
 
 def calculate_distance(lat1, lon1, lat2, lon2):
     return geodesic((lat1, lon1), (lat2, lon2)).kilometers
@@ -13,16 +13,23 @@ def calculate_distance(lat1, lon1, lat2, lon2):
 def prepare_sequences(data, feature_cols, target_cols, sequence_length):
     X, y = [], []
     data_values = data[feature_cols + target_cols].values
-    for i in range(len(data_values) - sequence_length):
-        X.append(data_values[i:i+sequence_length, :len(feature_cols)])
-        y.append(data_values[i+sequence_length-1, len(feature_cols):])
+    for i in range(sequence_length, len(data_values) + 1):
+        X.append(data_values[i - sequence_length:i, :len(feature_cols)])
+        y.append(data_values[i - 1, len(feature_cols):])
     return np.array(X), np.array(y)
 
 def prepare_test_sequences(data, feature_cols, sequence_length):
     X = []
     data_values = data[feature_cols].values
-    for i in range(len(data_values) - sequence_length + 1):
-        X.append(data_values[i:i+sequence_length])
+    num_samples = len(data_values)
+    for i in range(num_samples):
+        start_idx = max(0, i - sequence_length + 1)
+        seq = data_values[start_idx:i+1]
+        # Pad sequences that are shorter than the required length
+        if len(seq) < sequence_length:
+            padding = np.zeros((sequence_length - len(seq), len(feature_cols)))
+            seq = np.vstack((padding, seq))
+        X.append(seq)
     return np.array(X)
 
 def prepare_test_data(ais_test, vessels, vessel_type_categories):
@@ -128,7 +135,7 @@ def main() -> None:
 
     # Evaluate on validation set
     predictions_val = model.predict(X_val)
-    val_data = val_data.iloc[sequence_length:]  # Align with predictions
+    val_data = val_data.iloc[sequence_length - 1:]  # Align with predictions
     val_data['pred_latitude'] = predictions_val[:, 0]
     val_data['pred_longitude'] = predictions_val[:, 1]
 
@@ -148,8 +155,7 @@ def main() -> None:
     predictions_test = model.predict(X_test)
 
     # Align predictions with test data
-    prediction_indices = np.arange(sequence_length - 1, len(merged_test))
-    submission_df = merged_test.iloc[prediction_indices].copy()
+    submission_df = merged_test.copy()
     submission_df['longitude_predicted'] = predictions_test[:, 1]
     submission_df['latitude_predicted'] = predictions_test[:, 0]
 
@@ -158,7 +164,7 @@ def main() -> None:
         ais_test.reset_index(inplace=True)
         ais_test.rename(columns={'index': 'ID'}, inplace=True)
 
-    submission_df['ID'] = ais_test.iloc[prediction_indices]['ID'].values
+    submission_df['ID'] = ais_test['ID'].values
     submission_df['ID'] = submission_df['ID'].astype(int)
 
     submission_df = submission_df[['ID', 'longitude_predicted', 'latitude_predicted']]
