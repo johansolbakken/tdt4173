@@ -43,7 +43,11 @@ def prepare_test_data(ais_test, vessels, vessel_type_categories):
     )
 
     # Handle missing vesselType
-    merged_test['vesselType'].fillna('Unknown', inplace=True)
+    # Ensure 'vesselType' is of object (string) type
+    merged_test['vesselType'] = merged_test['vesselType'].astype('object')
+
+    # Handle missing 'vesselType' values
+    merged_test['vesselType'] = merged_test['vesselType'].fillna('Unknown')
 
     # Extract time-related features
     merged_test['time'] = pd.to_datetime(merged_test['time'])
