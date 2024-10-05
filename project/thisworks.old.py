@@ -84,9 +84,13 @@ def main() -> None:
         how='left'
     )
 
-    # Handle missing vesselType
-    merged_data['vesselType'].fillna('Unknown', inplace=True)
+    # Ensure 'vesselType' is of object (string) type
+    merged_data['vesselType'] = merged_data['vesselType'].astype('object')
 
+    # Handle missing 'vesselType' values
+    merged_data['vesselType'] = merged_data['vesselType'].fillna('Unknown')
+
+    # Rest of your code...
     # Extract time-related features
     merged_data['time'] = pd.to_datetime(merged_data['time'])
     merged_data['hour'] = merged_data['time'].dt.hour
