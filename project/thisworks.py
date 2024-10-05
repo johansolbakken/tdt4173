@@ -14,39 +14,6 @@ from tensorflow.keras import backend as K
 def calculate_distance(lat1, lon1, lat2, lon2):
     return geodesic((lat1, lon1), (lat2, lon2)).kilometers
 
-def haversine_loss(y_true, y_pred):
-    """
-    Custom loss function to calculate the mean Haversine distance between predicted and true coordinates.
-    """
-    # Convert degrees to radians manually
-    y_true_rad = y_true * (np.pi / 180.0)
-    y_pred_rad = y_pred * (np.pi / 180.0)
-
-    lat_true = y_true_rad[:, 0]
-    lon_true = y_true_rad[:, 1]
-    lat_pred = y_pred_rad[:, 0]
-    lon_pred = y_pred_rad[:, 1]
-
-    # Haversine formula components
-    dlat = lat_pred - lat_true
-    dlon = lon_pred - lon_true
-
-    sin_dlat = tf.math.sin(dlat / 2)
-    sin_dlon = tf.math.sin(dlon / 2)
-
-    a = sin_dlat**2 + tf.math.cos(lat_true) * tf.math.cos(lat_pred) * sin_dlon**2
-
-    # Clip 'a' to prevent invalid values due to floating-point errors
-    a = tf.clip_by_value(a, 0.0, 1.0)
-
-    c = 2 * tf.math.atan2(tf.math.sqrt(a), tf.math.sqrt(1.0 - a))
-
-    radius = 6371.0  # Earth's radius in kilometers
-    distance = radius * c
-
-    # Return the mean distance as the loss
-    return K.mean(distance)
-
 def prepare_sequences(data, feature_cols, target_cols, sequence_length):
     X, y, vessel_types = [], [], []
     data_values = data[feature_cols + target_cols + ['vessel_type_encoded']].values
@@ -111,12 +78,20 @@ def prepare_test_data(ais_test, vessels, vessel_type_categories):
         how='left'
     )
 
-    # Handle missing vesselType
-    merged_test['vesselType'].fillna('-1', inplace=True)
+    # Convert 'vesselType' to string (object) type to accommodate string values
+    merged_test['vesselType'] = merged_test['vesselType'].astype('object')
+
+    # Handle missing vesselType by filling with '-1'
+    merged_test['vesselType'] = merged_test['vesselType'].fillna('-1')
+
+    # Ensure that vessel_type_categories includes '-1'
+    if '-1' not in vessel_type_categories:
+        vessel_type_categories = vessel_type_categories.tolist() + ['-1']
 
     # Encode vessel type as numeric categories (ensure consistency with training data)
-    merged_test['vesselType'] = pd.Categorical(merged_test['vesselType'], categories=vessel_type_categories)
-    merged_test['vesselType'] = merged_test['vesselType'].fillna('-1')
+    merged_test['vesselType'] = pd.Categorical(
+        merged_test['vesselType'], categories=vessel_type_categories
+    )
     merged_test['vessel_type_encoded'] = merged_test['vesselType'].cat.codes
 
     return merged_test
