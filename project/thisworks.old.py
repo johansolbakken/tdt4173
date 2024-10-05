@@ -247,7 +247,7 @@ def split_data(
     features: List[str],
     target: List[str],
     sequence_length: int
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, pd.DataFrame]:
     """Split the data into training and validation sets and prepare sequences.
 
     Args:
@@ -258,7 +258,7 @@ def split_data(
 
     Returns:
         A tuple containing training and validation sequences and targets:
-        (X_train, y_train, X_val, y_val).
+        (X_train, y_train, X_val, y_val, val_data).
     """
     logger.info("Splitting data into training and validation sets.")
     # Use early data as training, later data as validation
@@ -274,7 +274,7 @@ def split_data(
     X_train, y_train = prepare_sequences(train_data, features, target, sequence_length)
     X_val, y_val = prepare_sequences(val_data, features, target, sequence_length)
     logger.info("Data splitting and sequence preparation completed.")
-    return X_train, y_train, X_val, y_val
+    return X_train, y_train, X_val, y_val, val_data
 
 def build_model(input_shape: Tuple[int, int]) -> tf.keras.Model:
     """Build and compile the LSTM model.
@@ -337,7 +337,14 @@ def evaluate_model(
     """
     logger.info("Evaluating the model on the validation set.")
     predictions_val = model.predict(X_val)
-    val_data_aligned = val_data.iloc[sequence_length - 1:].copy()  # Align with predictions
+    logger.debug(f"Number of predictions: {predictions_val.shape[0]}")
+    logger.debug(f"Number of validation samples: {len(val_data) - sequence_length + 1}")
+
+    # Align with predictions
+    val_data_aligned = val_data.iloc[sequence_length - 1:].copy()
+    logger.debug(f"Aligned validation data size: {len(val_data_aligned)}")
+
+    # Assign predictions
     val_data_aligned['pred_latitude'] = predictions_val[:, 0]
     val_data_aligned['pred_longitude'] = predictions_val[:, 1]
     logger.debug("Predictions on validation set obtained.")
@@ -432,8 +439,8 @@ def main() -> None:
 
     # Split data and prepare sequences
     sequence_length = 5
-    X_train, y_train, X_val, y_val = split_data(merged_data, features, target, sequence_length)
-
+    X_train, y_train, X_val, y_val, val_data = split_data(merged_data, features, target, sequence_length)
+    
     # Build the LSTM model
     input_shape = (sequence_length, len(features))
     model = build_model(input_shape)
@@ -443,7 +450,7 @@ def main() -> None:
     train_model(model, X_train, y_train, X_val, y_val)
 
     # Evaluate the model
-    mean_error_distance = evaluate_model(model, X_val, merged_data, sequence_length)
+    mean_error_distance = evaluate_model(model, X_val, val_data, sequence_length)
 
     # Prepare test data
     merged_test, test_features = prepare_test_data(ais_test, vessels, vessel_type_categories)
