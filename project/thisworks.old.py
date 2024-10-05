@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 from geopy.distance import geodesic
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense
+from tensorflow.keras.layers import LSTM, Dense, Input
 from sklearn.model_selection import train_test_split
 import tensorflow as tf
 
@@ -68,6 +68,7 @@ def prepare_test_data(ais_test, vessels, vessel_type_categories):
 
 def main() -> None:
     print("TensorFlow version:", tf.__version__)
+    print("Keras version:", tf.keras.__version__)
 
     physical_devices = tf.config.list_physical_devices()
     print("Physical devices:", physical_devices)
@@ -145,7 +146,8 @@ def main() -> None:
 
     # Build the LSTM model
     model = Sequential()
-    model.add(LSTM(64, return_sequences=False, input_shape=(sequence_length, len(features))))
+    model.add(Input(shape=(sequence_length, len(features))))
+    model.add(LSTM(64, return_sequences=False))
     model.add(Dense(2))  # Predict latitude and longitude
 
     model.compile(optimizer='adam', loss='mean_absolute_error')
