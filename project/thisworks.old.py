@@ -18,7 +18,7 @@ def setup_logger() -> logging.Logger:
         Configured logger instance.
     """
     logger = logging.getLogger("ML_Pipeline")
-    logger.setLevel(logging.DEBUG)
+    logger.setLevel(logging.INFO)
     
     # Define log colors for different levels
     formatter = ColoredFormatter(
