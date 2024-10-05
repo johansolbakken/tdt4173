@@ -1,5 +1,8 @@
-pandas
+keras
+jupyter
+tensorflow-macos
+tensorflow-metal
 geopy
+pandas
 scikit-learn
-numpy
-tensorflow
+colorlog
