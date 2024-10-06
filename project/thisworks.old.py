@@ -58,7 +58,6 @@ def calculate_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> fl
         The distance in kilometers between the two points.
     """
     distance = geodesic((lat1, lon1), (lat2, lon2)).kilometers
-    logger.debug(f"Calculated distance: {distance} km between points ({lat1}, {lon1}) and ({lat2}, {lon2})")
     return distance
 
 def prepare_sequences(
@@ -314,7 +313,7 @@ def train_model(
         The history object containing training details.
     """
     logger.info("Starting model training.")
-    history = model.fit(X_train, y_train, epochs=1, validation_data=(X_val, y_val))
+    history = model.fit(X_train, y_train, epochs=3, validation_data=(X_val, y_val))
     logger.info("Model training completed.")
     return history
 
