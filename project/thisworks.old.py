@@ -4,6 +4,7 @@ from geopy.distance import geodesic
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Input
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
 import tensorflow as tf
 from typing import List, Tuple
 import logging
@@ -123,6 +124,7 @@ def prepare_test_data(
     vessel_type_categories: pd.Index,
     ports: pd.DataFrame,  # Added ports dataset
     features: List[str],
+    scaler: StandardScaler,
     low_speed_threshold: float = 5.0,  # Default threshold for low speed in knots
     port_radius_km: float = 10.0  # Radius to consider proximity to port
 ) -> Tuple[pd.DataFrame, List[str]]:
@@ -134,6 +136,7 @@ def prepare_test_data(
         vessel_type_categories: Categories of vessel types from training data.
         ports: DataFrame containing ports information.
         features: List of feature column names to include.
+        scaler: Fitted StandardScaler instance for feature scaling.
         low_speed_threshold: Speed below which vessel is considered to have low speed.
         port_radius_km: Radius in kilometers to consider a vessel near a port.
 
@@ -209,6 +212,11 @@ def prepare_test_data(
     # Handle missing feature values
     merged_test[features] = merged_test[features].fillna(0)
     logger.debug("Handled missing feature values in test data.")
+
+    # **Feature Scaling**
+    logger.info("Applying feature scaling to test data.")
+    merged_test[features] = scaler.transform(merged_test[features])
+    logger.debug("Applied StandardScaler to test data features.")
 
     logger.info("Test data preparation completed.")
     return merged_test, features
@@ -334,8 +342,8 @@ def split_data(
     features: List[str],
     target: List[str],
     sequence_length: int
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, pd.DataFrame]:
-    """Split the data into training and validation sets and prepare sequences.
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, pd.DataFrame, StandardScaler]:
+    """Split the data into training and validation sets, apply feature scaling, and prepare sequences.
 
     Args:
         merged_data: DataFrame containing the preprocessed data.
@@ -344,8 +352,8 @@ def split_data(
         sequence_length: The length of each sequence.
 
     Returns:
-        A tuple containing training and validation sequences and targets:
-        (X_train, y_train, X_val, y_val, val_data).
+        A tuple containing training and validation sequences and targets, validation data, and the scaler:
+        (X_train, y_train, X_val, y_val, val_data, scaler).
     """
     logger.info("Splitting data into training and validation sets.")
     # Use early data as training, later data as validation
@@ -357,11 +365,20 @@ def split_data(
     val_data[features] = val_data[features].fillna(0)
     logger.debug("Handled missing feature values in training and validation data.")
 
+    # **Feature Scaling**
+    scaler = StandardScaler()
+    logger.info("Fitting StandardScaler on training data features.")
+    scaler.fit(train_data[features])
+    logger.debug("Fitted StandardScaler on training data features.")
+    train_data[features] = scaler.transform(train_data[features])
+    val_data[features] = scaler.transform(val_data[features])
+    logger.debug("Applied StandardScaler to training and validation data features.")
+
     # Prepare sequences
     X_train, y_train = prepare_sequences(train_data, features, target, sequence_length)
     X_val, y_val = prepare_sequences(val_data, features, target, sequence_length)
     logger.info("Data splitting and sequence preparation completed.")
-    return X_train, y_train, X_val, y_val, val_data
+    return X_train, y_train, X_val, y_val, val_data, scaler
 
 def build_model(input_shape: Tuple[int, int]) -> tf.keras.Model:
     """Build and compile the LSTM model.
@@ -525,9 +542,9 @@ def main() -> None:
     logger.debug(f"Features: {features}")
     logger.debug(f"Target: {target}")
 
-    # Split data and prepare sequences
+    # Split data and prepare sequences with feature scaling
     sequence_length = 5
-    X_train, y_train, X_val, y_val, val_data = split_data(merged_data, features, target, sequence_length)
+    X_train, y_train, X_val, y_val, val_data, scaler = split_data(merged_data, features, target, sequence_length)
     
     # Build the LSTM model
     input_shape = (sequence_length, len(features))
@@ -540,10 +557,10 @@ def main() -> None:
     # Evaluate the model
     mean_error_distance = evaluate_model(model, X_val, val_data, sequence_length)
 
-    # Prepare test data with the same features as training
+    # Prepare test data with the same features as training and apply scaling
     merged_test, test_features = prepare_test_data(
         ais_test, vessels, vessel_type_categories, ports, 
-        features, low_speed_threshold=5.0, port_radius_km=10.0
+        features, scaler, low_speed_threshold=5.0, port_radius_km=10.0
     )
 
     # Prepare test sequences
