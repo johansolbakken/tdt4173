@@ -120,7 +120,8 @@ def prepare_test_sequences(
 def prepare_test_data(
     ais_test: pd.DataFrame,
     vessels: pd.DataFrame,
-    vessel_type_categories: pd.Index
+    vessel_type_categories: pd.Index,
+    features: List[str]
 ) -> Tuple[pd.DataFrame, List[str]]:
     """Prepare and preprocess the test data.
 
@@ -128,6 +129,7 @@ def prepare_test_data(
         ais_test: DataFrame containing the AIS test data.
         vessels: DataFrame containing vessel information.
         vessel_type_categories: Categories of vessel types from training data.
+        features: List of feature column names to include.
 
     Returns:
         A tuple containing the merged test DataFrame and the list of feature columns.
@@ -162,8 +164,11 @@ def prepare_test_data(
     merged_test['vessel_type_encoded'] = merged_test['vesselType'].cat.codes
     logger.debug("Encoded vesselType as numeric categories.")
 
-    # Define the feature columns
-    features = ['hour', 'day_of_week', 'vessel_type_encoded']
+    # Ensure all required features are present
+    for feature in features:
+        if feature not in merged_test.columns:
+            merged_test[feature] = 0  # Assign a default value or handle appropriately
+            logger.warning(f"Feature '{feature}' missing in test data. Filled with default values.")
 
     # Handle missing feature values
     merged_test[features] = merged_test[features].fillna(0)
@@ -237,6 +242,15 @@ def preprocess_data(
     vessel_type_categories = merged_data['vesselType'].cat.categories
     merged_data['vessel_type_encoded'] = merged_data['vesselType'].cat.codes
     logger.debug("Encoded vesselType as numeric categories in training data.")
+
+    # Handle missing 'cog', 'sog', 'latitude', 'longitude' if any
+    for feature in ['cog', 'sog', 'latitude', 'longitude']:
+        if feature not in merged_data.columns:
+            merged_data[feature] = 0
+            logger.warning(f"Feature '{feature}' missing in training data. Filled with default values.")
+        else:
+            merged_data[feature] = merged_data[feature].fillna(merged_data[feature].mean())
+            logger.debug(f"Handled missing values in feature '{feature}' by imputing with mean.")
 
     logger.info("Training data preprocessing completed.")
     return merged_data, vessel_type_categories
@@ -430,8 +444,8 @@ def main() -> None:
     # Preprocess training data
     merged_data, vessel_type_categories = preprocess_data(ais_train, vessels)
 
-    # Define features and target columns
-    features = ['hour', 'day_of_week', 'vessel_type_encoded']
+    # Define features and target columns (Original)
+    features = ['hour', 'day_of_week', 'vessel_type_encoded', 'cog', 'sog']
     target = ['future_latitude', 'future_longitude']
     logger.debug(f"Features: {features}")
     logger.debug(f"Target: {target}")
@@ -451,11 +465,14 @@ def main() -> None:
     # Evaluate the model
     mean_error_distance = evaluate_model(model, X_val, val_data, sequence_length)
 
-    # Prepare test data
-    merged_test, test_features = prepare_test_data(ais_test, vessels, vessel_type_categories)
+    # Prepare test data with the same features as training
+    merged_test, test_features = prepare_test_data(ais_test, vessels, vessel_type_categories, features)
 
     # Prepare test sequences
     X_test = prepare_test_sequences(merged_test, test_features, sequence_length)
+
+    # Verify the shape of test data
+    logger.debug(f"Test sequences shape: {X_test.shape}")  # Should be (num_samples, 5, 7)
 
     # Make predictions on test data
     logger.info("Making predictions on the test set.")
