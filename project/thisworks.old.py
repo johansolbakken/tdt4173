@@ -121,7 +121,10 @@ def prepare_test_data(
     ais_test: pd.DataFrame,
     vessels: pd.DataFrame,
     vessel_type_categories: pd.Index,
-    features: List[str]
+    ports: pd.DataFrame,  # Added ports dataset
+    features: List[str],
+    low_speed_threshold: float = 5.0,  # Default threshold for low speed in knots
+    port_radius_km: float = 10.0  # Radius to consider proximity to port
 ) -> Tuple[pd.DataFrame, List[str]]:
     """Prepare and preprocess the test data.
 
@@ -129,7 +132,10 @@ def prepare_test_data(
         ais_test: DataFrame containing the AIS test data.
         vessels: DataFrame containing vessel information.
         vessel_type_categories: Categories of vessel types from training data.
+        ports: DataFrame containing ports information.
         features: List of feature column names to include.
+        low_speed_threshold: Speed below which vessel is considered to have low speed.
+        port_radius_km: Radius in kilometers to consider a vessel near a port.
 
     Returns:
         A tuple containing the merged test DataFrame and the list of feature columns.
@@ -164,6 +170,36 @@ def prepare_test_data(
     merged_test['vessel_type_encoded'] = merged_test['vesselType'].cat.codes
     logger.debug("Encoded vesselType as numeric categories.")
 
+    # **Feature Engineering: Low Speed Indicator**
+    merged_test['low_speed'] = (merged_test['sog'] < low_speed_threshold).astype(int)
+    features.append('low_speed')  # Add to feature list
+    logger.debug("Added low_speed indicator feature.")
+
+    # # **Feature Engineering: Proximity to Port**
+    # # Calculate distance to each port and take the minimum distance
+    # def compute_min_distance(row):
+    #     vessel_coord = (row['latitude'], row['longitude'])
+    #     distances = ports.apply(
+    #         lambda port: calculate_distance(
+    #             vessel_coord[0], vessel_coord[1],
+    #             port['latitude'], port['longitude']
+    #         ),
+    #         axis=1
+    #     )
+    #     min_distance = distances.min()
+    #     return min_distance
+    #
+    # logger.info("Calculating minimum distance to ports for each vessel.")
+    # merged_test['min_distance_to_port'] = merged_test.apply(compute_min_distance, axis=1)
+    # features.append('min_distance_to_port')  # Add to feature list
+    # logger.debug("Added min_distance_to_port feature.")
+    #
+    # # **Feature Engineering: Within Port Radius**
+    # merged_test['within_port_radius'] = (merged_test['min_distance_to_port'] <= port_radius_km).astype(int)
+    # features.append('within_port_radius')  # Add to feature list
+    # logger.debug("Added within_port_radius feature.")
+
+    # **Handling Missing Features**
     # Ensure all required features are present
     for feature in features:
         if feature not in merged_test.columns:
@@ -195,13 +231,15 @@ def load_data() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame,
 
 def preprocess_data(
     ais_train: pd.DataFrame,
-    vessels: pd.DataFrame
+    vessels: pd.DataFrame,
+    ports: pd.DataFrame  # Added ports dataset for consistency
 ) -> Tuple[pd.DataFrame, pd.Index]:
     """Preprocess the training data and merge with vessel information.
 
     Args:
         ais_train: DataFrame containing the AIS training data.
         vessels: DataFrame containing vessel information.
+        ports: DataFrame containing ports information.
 
     Returns:
         A tuple containing the merged training DataFrame and vessel type categories.
@@ -243,6 +281,34 @@ def preprocess_data(
     merged_data['vessel_type_encoded'] = merged_data['vesselType'].cat.codes
     logger.debug("Encoded vesselType as numeric categories in training data.")
 
+    # **Feature Engineering: Low Speed Indicator**
+    low_speed_threshold = 5.0  # Example threshold in knots
+    merged_data['low_speed'] = (merged_data['sog'] < low_speed_threshold).astype(int)
+    logger.debug("Added low_speed indicator feature.")
+
+    # # **Feature Engineering: Proximity to Port**
+    # def compute_min_distance(row):
+    #     vessel_coord = (row['latitude'], row['longitude'])
+    #     distances = ports.apply(
+    #         lambda port: calculate_distance(
+    #             vessel_coord[0], vessel_coord[1],
+    #             port['latitude'], port['longitude']
+    #         ),
+    #         axis=1
+    #     )
+    #     min_distance = distances.min()
+    #     return min_distance
+    #
+    # logger.info("Calculating minimum distance to ports for each vessel in training data.")
+    # merged_data['min_distance_to_port'] = merged_data.apply(compute_min_distance, axis=1)
+    # logger.debug("Added min_distance_to_port feature.")
+    #
+    # # **Feature Engineering: Within Port Radius**
+    # port_radius_km = 10.0  # Example radius in kilometers
+    # merged_data['within_port_radius'] = (merged_data['min_distance_to_port'] <= port_radius_km).astype(int)
+    # logger.debug("Added within_port_radius feature.")
+
+    # **Handling Missing Features**
     # Handle missing 'cog', 'sog', 'latitude', 'longitude' if any
     for feature in ['cog', 'sog', 'latitude', 'longitude']:
         if feature not in merged_data.columns:
@@ -251,6 +317,14 @@ def preprocess_data(
         else:
             merged_data[feature] = merged_data[feature].fillna(merged_data[feature].mean())
             logger.debug(f"Handled missing values in feature '{feature}' by imputing with mean.")
+
+    # **Additional Features from Feature Engineering**
+    # Ensure that the new features are included in the feature list
+    additional_features = ['low_speed', 'min_distance_to_port', 'within_port_radius']
+    for feat in additional_features:
+        if feat not in merged_data.columns:
+            merged_data[feat] = 0
+            logger.warning(f"Additional feature '{feat}' missing in training data. Filled with default values.")
 
     logger.info("Training data preprocessing completed.")
     return merged_data, vessel_type_categories
@@ -327,7 +401,7 @@ def train_model(
         The history object containing training details.
     """
     logger.info("Starting model training.")
-    history = model.fit(X_train, y_train, epochs=3, validation_data=(X_val, y_val))
+    history = model.fit(X_train, y_train, epochs=10, validation_data=(X_val, y_val), batch_size=64)
     logger.info("Model training completed.")
     return history
 
@@ -442,10 +516,11 @@ def main() -> None:
     logger.debug(f"Ports Columns: {list(ports.columns)}")
 
     # Preprocess training data
-    merged_data, vessel_type_categories = preprocess_data(ais_train, vessels)
+    merged_data, vessel_type_categories = preprocess_data(ais_train, vessels, ports)
 
-    # Define features and target columns (Original)
-    features = ['hour', 'day_of_week', 'vessel_type_encoded', 'cog', 'sog']
+    # Define features and target columns (Original + Additional Features)
+    features = ['hour', 'day_of_week', 'vessel_type_encoded', 'cog', 'sog', 
+               'low_speed']
     target = ['future_latitude', 'future_longitude']
     logger.debug(f"Features: {features}")
     logger.debug(f"Target: {target}")
@@ -466,13 +541,16 @@ def main() -> None:
     mean_error_distance = evaluate_model(model, X_val, val_data, sequence_length)
 
     # Prepare test data with the same features as training
-    merged_test, test_features = prepare_test_data(ais_test, vessels, vessel_type_categories, features)
+    merged_test, test_features = prepare_test_data(
+        ais_test, vessels, vessel_type_categories, ports, 
+        features, low_speed_threshold=5.0, port_radius_km=10.0
+    )
 
     # Prepare test sequences
     X_test = prepare_test_sequences(merged_test, test_features, sequence_length)
 
     # Verify the shape of test data
-    logger.debug(f"Test sequences shape: {X_test.shape}")  # Should be (num_samples, 5, 7)
+    logger.debug(f"Test sequences shape: {X_test.shape}")  # Should be (num_samples, 5, num_features)
 
     # Make predictions on test data
     logger.info("Making predictions on the test set.")
