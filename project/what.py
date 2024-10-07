@@ -5,9 +5,15 @@ from typing import Tuple
 from colorlog import ColoredFormatter
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense, Input, Dropout, Bidirectional, GRU
+from tensorflow.keras.layers import LSTM, Dense, Input, Dropout, Bidirectional, GRU, BatchNormalization
+from tensorflow.keras.callbacks import EarlyStopping,ReduceLROnPlateau
 import numpy as np
 import tensorflow as tf
+from rtree import index
+from shapely.geometry import Point
+import time
+from tqdm import tqdm
+
 
 # Configure the colorful logger
 def setup_logger() -> logging.Logger:
@@ -61,13 +67,14 @@ def load_data() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame,
     return ais_train, ais_test, vessels, ports, schedules
 
 
+
 def prepare_data(
     ais_train: pd.DataFrame,
     vessels: pd.DataFrame, 
     ports: pd.DataFrame, 
     schedules: pd.DataFrame
-) -> Tuple[np.ndarray, np.ndarray, MinMaxScaler]:
-    """Prepare the data for the LSTM model, including additional time-based and vessel-specific features.
+) -> Tuple[np.ndarray, np.ndarray, MinMaxScaler, MinMaxScaler]:
+    """Prepare the data for the LSTM model, including additional time-based, vessel-specific, and port proximity features.
     
     Args:
         ais_train: DataFrame containing AIS training data.
@@ -100,14 +107,40 @@ def prepare_data(
     # Fill missing values in vessel-specific data with appropriate defaults
     ais_train['maxSpeed'] = ais_train['maxSpeed'].fillna(ais_train['maxSpeed'].mean())
 
+    # Measure time to create the R-tree index for ports
+    start_time = time.time()
+    port_idx = index.Index()
+    for idx, row in ports.iterrows():
+        port_idx.insert(idx, (row['longitude'], row['latitude'], row['longitude'], row['latitude']))
+    end_time = time.time()
+    logger.info(f"Time to build R-tree index for ports: {end_time - start_time:.2f} seconds")
+
+    # Measure time to calculate the nearest port for each vessel with progress and ETA
+    total_vessels = len(ais_train)
+    start_time = time.time()
+    closest_ports = []
+
+    for _, vessel in tqdm(ais_train.iterrows(), total=total_vessels, desc="Calculating nearest ports", unit="vessel"):
+        point = Point(vessel['longitude'], vessel['latitude'])
+        nearest_port_idx = list(port_idx.nearest((vessel['longitude'], vessel['latitude'], vessel['longitude'], vessel['latitude']), 1))[0]
+        closest_port = ports.iloc[nearest_port_idx]
+        distance_to_port = point.distance(Point(closest_port['longitude'], closest_port['latitude']))
+        closest_ports.append(distance_to_port)
+
+    end_time = time.time()
+    logger.info(f"Time to calculate closest port for all vessels: {end_time - start_time:.2f} seconds for {total_vessels} vessels")
+
+    # Add the calculated distances to the AIS data
+    ais_train['distance_to_nearest_port'] = closest_ports
+
     # Extract the relevant features, including the new ones
     features = ais_train[['latitude', 'longitude', 'sog', 'cog_sin', 'cog_cos', 'hour_of_day', 'day_of_week', 
-                          'time_elapsed', 'speed_category', 'maxSpeed']].values
+                          'time_elapsed', 'speed_category', 'maxSpeed', 'distance_to_nearest_port']].values
     target = ais_train[['latitude', 'longitude']].shift(-1).ffill().values
 
     # Normalize features
-    scaler = MinMaxScaler()
-    features_scaled = scaler.fit_transform(features)
+    feature_scaler = MinMaxScaler()
+    features_scaled = feature_scaler.fit_transform(features)
     
     # Reshape for LSTM input: (samples, timesteps, features)
     X = features_scaled.reshape((features_scaled.shape[0], 1, features_scaled.shape[1]))
@@ -117,7 +150,7 @@ def prepare_data(
     y = target_scaler.fit_transform(target)    
     
     logger.info("Data preparation complete.")
-    return X, y, scaler
+    return X, y, feature_scaler, target_scaler
 
 def geodesic_loss(y_true, y_pred):
     """Calculate the Haversine distance between true and predicted coordinates.
@@ -167,18 +200,23 @@ def build_model(input_shape: Tuple[int, int]) -> Sequential:
         Compiled LSTM model.
     """
     logger.info("Building the LSTM model.")
+ 
     model = Sequential()
     model.add(Input(shape=input_shape))  # Use Input layer to specify the shape
     lstm = True
     if lstm:
         model.add(Bidirectional(LSTM(units=100, return_sequences=True)))
+        model.add(BatchNormalization())  # Batch normalization after the first LSTM layer
         model.add(Dropout(0.2))
         model.add(Bidirectional(LSTM(units=100)))
+        model.add(BatchNormalization())  # Batch normalization after the first LSTM layer
         model.add(Dropout(0.2))
     else:
         model.add(GRU(units=100, return_sequences=True))
+        model.add(BatchNormalization())  # Batch normalization after the first LSTM layer
         model.add(Dropout(0.2))
         model.add(GRU(units=100))
+        model.add(BatchNormalization())  # Batch normalization after the first LSTM layer
     model.add(Dense(units=2))  # Output: latitude and longitude
     model.compile(optimizer='adam', loss=geodesic_loss)
     logger.info("Model built successfully.")
@@ -193,16 +231,20 @@ def train_model(model: Sequential, X_train: np.ndarray, y_train: np.ndarray) -> 
         y_train: Training targets.
     """
     logger.info("Starting model training.")
-    model.fit(X_train, y_train, epochs=10, batch_size=32, validation_split=0.2)
+    early_stopping = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
+    reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=3, min_lr=1e-6)
+
+    model.fit(X_train, y_train, epochs=10, batch_size=32, validation_split=0.2,callbacks=[early_stopping, reduce_lr])
     logger.info("Model training complete.")
 
-def generate_submission(model: Sequential, ais_test: pd.DataFrame, scaler: MinMaxScaler) -> None:
+def generate_submission(model: Sequential, ais_test: pd.DataFrame, feature_scaler: MinMaxScaler, target_scaler: MinMaxScaler) -> None:
     """Generate a submission file with the predicted vessel positions.
     
     Args:
         model: Trained LSTM model.
         ais_test: DataFrame containing AIS test data.
-        scaler: Scaler used to normalize the features.
+        feature_scaler: Scaler used to normalize the features.
+        target_scaler: Scaler used to normalize the target coordinates.
     """
     logger.info("Generating predictions for the test set.")
     
@@ -210,17 +252,19 @@ def generate_submission(model: Sequential, ais_test: pd.DataFrame, scaler: MinMa
     test_features = ais_test[['scaling_factor']].values
     
     # Since the test data only has one feature, we need to adjust the input shape to match the model's expectation
-    num_train_features = scaler.n_features_in_
+    num_train_features = feature_scaler.n_features_in_
     test_features_padded = np.zeros((test_features.shape[0], num_train_features))
     test_features_padded[:, :test_features.shape[1]] = test_features
 
     # Normalize the padded test features to match the training data scale
-    test_features_scaled = scaler.transform(test_features_padded)
+    test_features_scaled = feature_scaler.transform(test_features_padded)
     X_test = test_features_scaled.reshape((test_features_scaled.shape[0], 1, test_features_scaled.shape[1]))
     
     # Make predictions using the model
     predictions = model.predict(X_test)
-    predictions = scaler.inverse_transform(predictions)
+    
+    # Inverse transform the predictions using the target scaler
+    predictions = target_scaler.inverse_transform(predictions)
     
     # Create the submission DataFrame in the required format
     submission = pd.DataFrame({
@@ -249,14 +293,14 @@ def main() -> None:
     print(f"Schedules:\n{schedules.head()}")
 
     # Prepare the data
-    X_train, y_train, scaler = prepare_data(ais_train, vessels, ports, schedules)
+    X_train, y_train, feature_scaler, target_scaler = prepare_data(ais_train, vessels, ports, schedules)
 
     # Build and train the LSTM model
     model = build_model(input_shape=(X_train.shape[1], X_train.shape[2]))
     train_model(model, X_train, y_train)
 
     # Generate the submission file
-    generate_submission(model, ais_test, scaler)
+    generate_submission(model, ais_test, feature_scaler, target_scaler)
     
     logger.info("Machine learning pipeline finished successfully.")
 
