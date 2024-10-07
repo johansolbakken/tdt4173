@@ -5,7 +5,7 @@ from typing import Tuple
 from colorlog import ColoredFormatter
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense, Input, Dropout
+from tensorflow.keras.layers import LSTM, Dense, Input, Dropout, Bidirectional, GRU
 import numpy as np
 import tensorflow as tf
 
@@ -111,7 +111,10 @@ def prepare_data(
     
     # Reshape for LSTM input: (samples, timesteps, features)
     X = features_scaled.reshape((features_scaled.shape[0], 1, features_scaled.shape[1]))
-    y = target
+    
+    # Normalize target data (latitude and longitude)
+    target_scaler = MinMaxScaler()
+    y = target_scaler.fit_transform(target)    
     
     logger.info("Data preparation complete.")
     return X, y, scaler
@@ -166,10 +169,16 @@ def build_model(input_shape: Tuple[int, int]) -> Sequential:
     logger.info("Building the LSTM model.")
     model = Sequential()
     model.add(Input(shape=input_shape))  # Use Input layer to specify the shape
-    model.add(LSTM(units=100, return_sequences=True))
-    model.add(Dropout(0.2))
-    model.add(LSTM(units=100))
-    model.add(Dropout(0.2))
+    lstm = True
+    if lstm:
+        model.add(Bidirectional(LSTM(units=100, return_sequences=True)))
+        model.add(Dropout(0.2))
+        model.add(Bidirectional(LSTM(units=100)))
+        model.add(Dropout(0.2))
+    else:
+        model.add(GRU(units=100, return_sequences=True))
+        model.add(Dropout(0.2))
+        model.add(GRU(units=100))
     model.add(Dense(units=2))  # Output: latitude and longitude
     model.compile(optimizer='adam', loss=geodesic_loss)
     logger.info("Model built successfully.")
@@ -211,6 +220,7 @@ def generate_submission(model: Sequential, ais_test: pd.DataFrame, scaler: MinMa
     
     # Make predictions using the model
     predictions = model.predict(X_test)
+    predictions = scaler.inverse_transform(predictions)
     
     # Create the submission DataFrame in the required format
     submission = pd.DataFrame({
