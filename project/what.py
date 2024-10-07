@@ -59,8 +59,14 @@ def load_data() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame,
     logger.info("Datasets loaded successfully.")
     return ais_train, ais_test, vessels, ports, schedules
 
-def prepare_data(ais_train: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, MinMaxScaler]:
-    """Prepare the data for the LSTM model.
+
+def prepare_data(
+    ais_train: pd.DataFrame,
+    vessels: pd.DataFrame, 
+    ports: pd.DataFrame, 
+    schedules: pd.DataFrame
+) -> Tuple[np.ndarray, np.ndarray, MinMaxScaler]:
+    """Prepare the data for the LSTM model, including additional time-based features.
     
     Args:
         ais_train: DataFrame containing AIS training data.
@@ -70,8 +76,18 @@ def prepare_data(ais_train: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, MinMa
     """
     logger.info("Preparing data for the model.")
     
-    # Extract relevant features and target (latitude, longitude)
-    features = ais_train[['latitude', 'longitude', 'sog', 'cog']].values
+    # Convert the 'time' column to datetime format for feature extraction
+    ais_train['time'] = pd.to_datetime(ais_train['time'])
+    
+    # Extract hour of the day and day of the week as new features
+    ais_train['hour_of_day'] = ais_train['time'].dt.hour
+    ais_train['day_of_week'] = ais_train['time'].dt.dayofweek
+
+    # Calculate the time elapsed since the first recorded entry for each vessel
+    ais_train['time_elapsed'] = (ais_train['time'] - ais_train['time'].min()).dt.total_seconds()
+    
+    # Extract the relevant features, including the new ones
+    features = ais_train[['latitude', 'longitude', 'sog', 'cog', 'hour_of_day', 'day_of_week', 'time_elapsed']].values
     target = ais_train[['latitude', 'longitude']].shift(-1).ffill().values
 
     # Normalize features
@@ -168,7 +184,7 @@ def main() -> None:
     print(f"Schedules:\n{schedules.head()}")
 
     # Prepare the data
-    X_train, y_train, scaler = prepare_data(ais_train)
+    X_train, y_train, scaler = prepare_data(ais_train, vessels, ports, schedules)
 
     # Build and train the LSTM model
     model = build_model(input_shape=(X_train.shape[1], X_train.shape[2]))
