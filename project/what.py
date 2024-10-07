@@ -7,6 +7,7 @@ from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Input
 import numpy as np
+import tensorflow as tf
 
 # Configure the colorful logger
 def setup_logger() -> logging.Logger:
@@ -101,6 +102,43 @@ def prepare_data(
     logger.info("Data preparation complete.")
     return X, y, scaler
 
+def geodesic_loss(y_true, y_pred):
+    """Calculate the Haversine distance between true and predicted coordinates.
+    
+    Args:
+        y_true: Tensor of true coordinates (latitude, longitude).
+        y_pred: Tensor of predicted coordinates (latitude, longitude).
+    
+    Returns:
+        Tensor representing the geodesic distance (Haversine distance) between the true and predicted points.
+    """
+    # Radius of the Earth in kilometers
+    R = 6371.0
+    
+    # Convert latitude and longitude from degrees to radians
+    y_true = tf.cast(y_true, dtype=tf.float32)
+    y_pred = tf.cast(y_pred, dtype=tf.float32)
+    
+    # Split the latitude and longitude into separate tensors
+    lat_true, lon_true = tf.split(y_true, num_or_size_splits=2, axis=1)
+    lat_pred, lon_pred = tf.split(y_pred, num_or_size_splits=2, axis=1)
+    
+    # Convert degrees to radians manually
+    lat_true = lat_true * tf.constant(np.pi / 180.0)
+    lon_true = lon_true * tf.constant(np.pi / 180.0)
+    lat_pred = lat_pred * tf.constant(np.pi / 180.0)
+    lon_pred = lon_pred * tf.constant(np.pi / 180.0)
+    
+    # Compute the differences between true and predicted coordinates
+    dlat = lat_pred - lat_true
+    dlon = lon_pred - lon_true
+    
+    # Haversine formula
+    a = tf.square(tf.sin(dlat / 2)) + tf.cos(lat_true) * tf.cos(lat_pred) * tf.square(tf.sin(dlon / 2))
+    c = 2 * tf.atan2(tf.sqrt(a), tf.sqrt(1 - a))
+    distance = R * c
+    
+    return tf.reduce_mean(distance)
 def build_model(input_shape: Tuple[int, int]) -> Sequential:
     """Build the LSTM model.
     
@@ -116,7 +154,7 @@ def build_model(input_shape: Tuple[int, int]) -> Sequential:
     model.add(LSTM(units=50, return_sequences=True))
     model.add(LSTM(units=50))
     model.add(Dense(units=2))  # Output: latitude and longitude
-    model.compile(optimizer='adam', loss='mse')
+    model.compile(optimizer='adam', loss=geodesic_loss)
     logger.info("Model built successfully.")
     return model
 
