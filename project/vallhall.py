@@ -218,7 +218,7 @@ def prepare_data(
 
 
     # Extract the relevant features, including the new ones
-    features = ais_train[['time', 'latitude', 'longitude', 'sog', 'cog_sin', 'cog_cos', 'hour_of_day', 'day_of_week', 'distance_to_nearest_port', 'anchored', 'vesselId_encoded']].values
+    features = ais_train[['latitude', 'longitude', 'sog', 'cog_sin', 'cog_cos', 'hour_of_day', 'day_of_week', 'distance_to_nearest_port', 'anchored', 'vesselId_encoded', 'time_elapsed']].values
     target = ais_train[['latitude', 'longitude']].shift(-1).ffill().values
 
     # Normalize features
@@ -334,9 +334,12 @@ def generate_submission(model: Sequential, ais_test: pd.DataFrame, feature_scale
     
     # Map vesselId to its encoded value using vessel_ids dictionary
     ais_test['vesselId_encoded'] = ais_test['vesselId'].map(vessel_ids).fillna(-1).astype(int)
-    
+   
+    # Calculate the time elapsed since the first recorded entry for each vessel
+    ais_test['time_elapsed'] = (ais_test['time'] - ais_test['time'].min()).dt.total_seconds()
+
     # Extract the relevant features for the test data
-    test_features = ais_test[['vesselId_encoded', 'time']].values
+    test_features = ais_test[['vesselId_encoded', 'time_elapsed']].values
 
     # Since the test data only has one feature, we need to adjust the input shape to match the model's expectation
     num_train_features = feature_scaler.n_features_in_
