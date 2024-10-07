@@ -216,10 +216,10 @@ def build_model(input_shape: Tuple[int, int]) -> Sequential:
     model.add(Input(shape=input_shape))  # Use Input layer to specify the shape
     lstm = True
     if lstm:
-        model.add(Bidirectional(LSTM(units=100, return_sequences=True)))
+        model.add(Bidirectional(LSTM(units=10, return_sequences=True)))
         model.add(BatchNormalization())  # Batch normalization after the first LSTM layer
         model.add(Dropout(0.2))
-        model.add(Bidirectional(LSTM(units=100)))
+        model.add(Bidirectional(LSTM(units=10)))
         model.add(BatchNormalization())  # Batch normalization after the first LSTM layer
         model.add(Dropout(0.2))
     else:
@@ -256,15 +256,16 @@ def generate_submission(model: Sequential, ais_test: pd.DataFrame, feature_scale
         ais_test: DataFrame containing AIS test data.
         feature_scaler: Scaler used to normalize the features.
         target_scaler: Scaler used to normalize the target coordinates.
+        vessel_ids: Dictionary to map vessel IDs to numerical indices.
     """
     logger.info("Generating predictions for the test set.")
     
-    # Use the scaling_factor as the main feature from the test data
-    test_features = ais_test[['vesselId_encoded']].values
-
-    # Convert vesselId to its encoded value using vessel_ids dictionary
+    # Map vesselId to its encoded value using vessel_ids dictionary
     ais_test['vesselId_encoded'] = ais_test['vesselId'].map(vessel_ids).fillna(-1).astype(int)
     
+    # Extract the relevant features for the test data
+    test_features = ais_test[['vesselId_encoded']].values
+
     # Since the test data only has one feature, we need to adjust the input shape to match the model's expectation
     num_train_features = feature_scaler.n_features_in_
     test_features_padded = np.zeros((test_features.shape[0], num_train_features))
