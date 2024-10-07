@@ -133,9 +133,16 @@ def prepare_data(
     # Add the calculated distances to the AIS data
     ais_train['distance_to_nearest_port'] = closest_ports
 
+    speed_threshold = 5.0  # knots
+    distance_threshold = 1.0  # kilometers
+
+    # Identify if the vessel is anchored
+    ais_train['anchored'] = (ais_train['sog'] < speed_threshold) & (ais_train['distance_to_nearest_port'] < distance_threshold)
+
+
     # Extract the relevant features, including the new ones
     features = ais_train[['latitude', 'longitude', 'sog', 'cog_sin', 'cog_cos', 'hour_of_day', 'day_of_week', 
-                          'time_elapsed', 'speed_category', 'maxSpeed', 'distance_to_nearest_port']].values
+                      'time_elapsed', 'speed_category', 'maxSpeed', 'distance_to_nearest_port', 'anchored']].values
     target = ais_train[['latitude', 'longitude']].shift(-1).ffill().values
 
     # Normalize features
