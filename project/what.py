@@ -62,7 +62,7 @@ def load_data() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame,
     ais_test = pd.read_csv('ais_test.csv')
     vessels = pd.read_csv('vessels.csv', sep='|')
     ports = pd.read_csv('ports.csv', sep='|')
-    schedules = pd.read_csv('schedules_to_may_2024.csv', sep='|')
+    schedules = pd.read_csv('schedules_to_may_2024.csv', sep='|', on_bad_lines='skip')
     logger.info("Datasets loaded successfully.")
     return ais_train, ais_test, vessels, ports, schedules
 
