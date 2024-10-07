@@ -1,7 +1,7 @@
 import pandas as pd
 import logging
 import sys
-from typing import Tuple
+from typing import Tuple, Dict
 from colorlog import ColoredFormatter
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
@@ -72,7 +72,8 @@ def prepare_data(
     ais_train: pd.DataFrame,
     vessels: pd.DataFrame, 
     ports: pd.DataFrame, 
-    schedules: pd.DataFrame
+    schedules: pd.DataFrame,
+    vessel_ids: Dict
 ) -> Tuple[np.ndarray, np.ndarray, MinMaxScaler, MinMaxScaler]:
     """Prepare the data for the LSTM model, including additional time-based, vessel-specific, and port proximity features.
     
@@ -93,7 +94,10 @@ def prepare_data(
 
     # Calculate the time elapsed since the first recorded entry for each vessel
     ais_train['time_elapsed'] = (ais_train['time'] - ais_train['time'].min()).dt.total_seconds()
-    
+   
+    # Map vesselId to its encoded value using vessel_ids dictionary
+    ais_train['vesselId_encoded'] = ais_train['vesselId'].map(vessel_ids).fillna(-1).astype(int)
+
     # Compute the sine and cosine of the course over ground (cog) to represent direction
     ais_train['cog_sin'] = np.sin(np.deg2rad(ais_train['cog']))
     ais_train['cog_cos'] = np.cos(np.deg2rad(ais_train['cog']))
@@ -142,7 +146,7 @@ def prepare_data(
 
     # Extract the relevant features, including the new ones
     features = ais_train[['latitude', 'longitude', 'sog', 'cog_sin', 'cog_cos', 'hour_of_day', 'day_of_week', 
-                      'time_elapsed', 'speed_category', 'maxSpeed', 'distance_to_nearest_port', 'anchored']].values
+                      'time_elapsed', 'speed_category', 'maxSpeed', 'distance_to_nearest_port', 'anchored', 'vesselId_encoded']].values
     target = ais_train[['latitude', 'longitude']].shift(-1).ffill().values
 
     # Normalize features
@@ -244,7 +248,7 @@ def train_model(model: Sequential, X_train: np.ndarray, y_train: np.ndarray) -> 
     model.fit(X_train, y_train, epochs=10, batch_size=32, validation_split=0.2,callbacks=[early_stopping, reduce_lr])
     logger.info("Model training complete.")
 
-def generate_submission(model: Sequential, ais_test: pd.DataFrame, feature_scaler: MinMaxScaler, target_scaler: MinMaxScaler) -> None:
+def generate_submission(model: Sequential, ais_test: pd.DataFrame, feature_scaler: MinMaxScaler, target_scaler: MinMaxScaler, vessel_ids: Dict) -> None:
     """Generate a submission file with the predicted vessel positions.
     
     Args:
@@ -256,7 +260,10 @@ def generate_submission(model: Sequential, ais_test: pd.DataFrame, feature_scale
     logger.info("Generating predictions for the test set.")
     
     # Use the scaling_factor as the main feature from the test data
-    test_features = ais_test[['scaling_factor']].values
+    test_features = ais_test[['vesselId_encoded']].values
+
+    # Convert vesselId to its encoded value using vessel_ids dictionary
+    ais_test['vesselId_encoded'] = ais_test['vesselId'].map(vessel_ids).fillna(-1).astype(int)
     
     # Since the test data only has one feature, we need to adjust the input shape to match the model's expectation
     num_train_features = feature_scaler.n_features_in_
@@ -299,15 +306,25 @@ def main() -> None:
     print(f"Ports Columns:\n{ports.head()}")
     print(f"Schedules:\n{schedules.head()}")
 
+    vessel_id_dict = {}
+    i = 0
+
+    # Use iterrows to iterate through the DataFrame
+    for _, row in vessels.iterrows():
+        vessel_id = row["vesselId"]
+        if vessel_id not in vessel_id_dict:
+            vessel_id_dict[vessel_id] = i
+            i += 1
+
     # Prepare the data
-    X_train, y_train, feature_scaler, target_scaler = prepare_data(ais_train, vessels, ports, schedules)
+    X_train, y_train, feature_scaler, target_scaler = prepare_data(ais_train, vessels, ports, schedules, vessel_id_dict)
 
     # Build and train the LSTM model
     model = build_model(input_shape=(X_train.shape[1], X_train.shape[2]))
     train_model(model, X_train, y_train)
 
     # Generate the submission file
-    generate_submission(model, ais_test, feature_scaler, target_scaler)
+    generate_submission(model, ais_test, feature_scaler, target_scaler, vessel_id_dict)
     
     logger.info("Machine learning pipeline finished successfully.")
 
