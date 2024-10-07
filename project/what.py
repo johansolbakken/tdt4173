@@ -5,7 +5,7 @@ from typing import Tuple
 from colorlog import ColoredFormatter
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense, Input
+from tensorflow.keras.layers import LSTM, Dense, Input, Dropout
 import numpy as np
 import tensorflow as tf
 
@@ -67,7 +67,7 @@ def prepare_data(
     ports: pd.DataFrame, 
     schedules: pd.DataFrame
 ) -> Tuple[np.ndarray, np.ndarray, MinMaxScaler]:
-    """Prepare the data for the LSTM model, including additional time-based features.
+    """Prepare the data for the LSTM model, including additional time-based and vessel-specific features.
     
     Args:
         ais_train: DataFrame containing AIS training data.
@@ -87,8 +87,22 @@ def prepare_data(
     # Calculate the time elapsed since the first recorded entry for each vessel
     ais_train['time_elapsed'] = (ais_train['time'] - ais_train['time'].min()).dt.total_seconds()
     
+    # Compute the sine and cosine of the course over ground (cog) to represent direction
+    ais_train['cog_sin'] = np.sin(np.deg2rad(ais_train['cog']))
+    ais_train['cog_cos'] = np.cos(np.deg2rad(ais_train['cog']))
+
+    # Categorize the speed of the vessel
+    ais_train['speed_category'] = pd.cut(ais_train['sog'], bins=[-1, 5, 15, np.inf], labels=[0, 1, 2])
+
+    # Merge vessel-specific information into ais_train data
+    ais_train = ais_train.merge(vessels[['vesselId', 'maxSpeed', 'length', 'yearBuilt']], on='vesselId', how='left')
+
+    # Fill missing values in vessel-specific data with appropriate defaults
+    ais_train['maxSpeed'] = ais_train['maxSpeed'].fillna(ais_train['maxSpeed'].mean())
+
     # Extract the relevant features, including the new ones
-    features = ais_train[['latitude', 'longitude', 'sog', 'cog', 'hour_of_day', 'day_of_week', 'time_elapsed']].values
+    features = ais_train[['latitude', 'longitude', 'sog', 'cog_sin', 'cog_cos', 'hour_of_day', 'day_of_week', 
+                          'time_elapsed', 'speed_category', 'maxSpeed']].values
     target = ais_train[['latitude', 'longitude']].shift(-1).ffill().values
 
     # Normalize features
@@ -139,6 +153,7 @@ def geodesic_loss(y_true, y_pred):
     distance = R * c
     
     return tf.reduce_mean(distance)
+
 def build_model(input_shape: Tuple[int, int]) -> Sequential:
     """Build the LSTM model.
     
@@ -151,8 +166,10 @@ def build_model(input_shape: Tuple[int, int]) -> Sequential:
     logger.info("Building the LSTM model.")
     model = Sequential()
     model.add(Input(shape=input_shape))  # Use Input layer to specify the shape
-    model.add(LSTM(units=50, return_sequences=True))
-    model.add(LSTM(units=50))
+    model.add(LSTM(units=100, return_sequences=True))
+    model.add(Dropout(0.2))
+    model.add(LSTM(units=100))
+    model.add(Dropout(0.2))
     model.add(Dense(units=2))  # Output: latitude and longitude
     model.compile(optimizer='adam', loss=geodesic_loss)
     logger.info("Model built successfully.")
@@ -167,7 +184,7 @@ def train_model(model: Sequential, X_train: np.ndarray, y_train: np.ndarray) -> 
         y_train: Training targets.
     """
     logger.info("Starting model training.")
-    model.fit(X_train, y_train, epochs=2, batch_size=32, validation_split=0.2)
+    model.fit(X_train, y_train, epochs=10, batch_size=32, validation_split=0.2)
     logger.info("Model training complete.")
 
 def generate_submission(model: Sequential, ais_test: pd.DataFrame, scaler: MinMaxScaler) -> None:
