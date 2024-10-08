@@ -225,7 +225,28 @@ def prepare_data(
     # Normalize features
     feature_scaler = MinMaxScaler()
     features_scaled = feature_scaler.fit_transform(features)
-    
+   
+    # Prepare the features and target values for each vessel separately
+    X_list = []
+    y_list = []
+
+    # Iterate over each vessel ID in the dataset
+    for vessel_id in tqdm(vessel_ids.keys(), total=len(vessel_ids), desc="Finding y 5 days forward", unit="vessel"):
+        # Filter data for the current vessel and sort it by time
+        vessel_data = ais_train[ais_train['vesselId'] == vessel_id].reset_index(drop=True)
+
+        # Ensure that we have at least 5 days of data for this vessel
+        for i in range(len(vessel_data) - 5):
+            # Append the feature set (X) for the current day
+            X_list.append(vessel_data.iloc[i].values)
+
+            # Append the target set (y) which is the position 5 days later
+            y_list.append(vessel_data.iloc[i + 5][['latitude', 'longitude']].values)
+
+    # Convert the collected lists to numpy arrays
+    X = np.array(X_list)
+    y = np.array(y_list)
+
     # Reshape for LSTM input: (samples, timesteps, features)
     X = features_scaled.reshape((features_scaled.shape[0], 1, features_scaled.shape[1]))
     
