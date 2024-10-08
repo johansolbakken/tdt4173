@@ -3,7 +3,6 @@ import logging
 import sys
 from typing import Tuple, Dict
 from colorlog import ColoredFormatter
-from pandas.core.construction import com
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Input, Dropout, Bidirectional, GRU, BatchNormalization
@@ -14,7 +13,6 @@ from rtree import index
 from shapely.geometry import Point
 import time
 from tqdm import tqdm
-from geopy.distance import geodesic
 
 
 # Configure the colorful logger
@@ -92,6 +90,9 @@ def prepare_data(
     for col in ['latitude', 'longitude', 'cog', 'sog', 'rot', 'heading', 'etaRaw']:
         ais_train[col] = pd.to_numeric(ais_train[col], errors='coerce')
 
+    # Clip latitude and longitude to their valid ranges
+    ais_train['latitude'] = ais_train['latitude'].clip(-90, 90)
+    ais_train['longitude'] = ais_train['longitude'].clip(-180, 180)
 
     print(len(ais_train))
 
@@ -332,6 +333,9 @@ def generate_submission(model: Sequential, ais_test: pd.DataFrame, feature_scale
     """
     logger.info("Generating predictions for the test set.")
     
+    # Convert the 'time' column to datetime format to handle arithmetic operations
+    ais_test['time'] = pd.to_datetime(ais_test['time'], errors='coerce')
+    
     # Map vesselId to its encoded value using vessel_ids dictionary
     ais_test['vesselId_encoded'] = ais_test['vesselId'].map(vessel_ids).fillna(-1).astype(int)
    
@@ -362,7 +366,11 @@ def generate_submission(model: Sequential, ais_test: pd.DataFrame, feature_scale
         'longitude_predicted': predictions[:, 1],
         'latitude_predicted': predictions[:, 0]
     })
-    
+   
+    # Clip predictions to valid latitude and longitude ranges
+    submission['latitude_predicted'] = submission['latitude_predicted'].clip(-90, 90)
+    submission['longitude_predicted'] = submission['longitude_predicted'].clip(-180, 180)
+
     # Ensure that the submission file has exactly 51739 rows as required
     assert submission.shape[0] == 51739, "The submission file must have exactly 51739 rows."
     
