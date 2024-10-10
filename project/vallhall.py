@@ -136,16 +136,16 @@ def prepare_data(
                         interpolated_point['time'] = interpolated_time
                         interpolated_point['latitude'] = interpolated_values['latitude']
                         interpolated_point['longitude'] = interpolated_values['longitude']
-                        interpolated_point['cog'] = interpolated_values['cog']
-                        interpolated_point['sog'] = interpolated_values['sog']
-                        interpolated_point['rot'] = interpolated_values['rot']
-                        interpolated_point['heading'] = interpolated_values['heading']
-                        interpolated_point['etaRaw'] = interpolated_values['etaRaw']
+                        # interpolated_point['cog'] = interpolated_values['cog']
+                        # interpolated_point['sog'] = interpolated_values['sog']
+                        # interpolated_point['rot'] = interpolated_values['rot']
+                        # interpolated_point['heading'] = interpolated_values['heading']
+                        # interpolated_point['etaRaw'] = interpolated_values['etaRaw']
 
                         # Copy the values of 'vesselId', 'portId', and 'navstat' directly from the current row
                         interpolated_point['vesselId'] = current_row['vesselId']
-                        interpolated_point['portId'] = current_row['portId']
-                        interpolated_point['navstat'] = current_row['navstat']
+                        # interpolated_point['portId'] = current_row['portId']
+                        # interpolated_point['navstat'] = current_row['navstat']
 
                         # Add the interpolated point to the list
                         interpolated_data.append(interpolated_point)
@@ -219,7 +219,7 @@ def prepare_data(
 
 
     # Extract the relevant features, including the new ones
-    features = ais_train[['latitude', 'longitude', 'sog', 'cog_sin', 'cog_cos', 'hour_of_day', 'day_of_week', 'distance_to_nearest_port', 'anchored', 'vesselId_encoded', 'time_elapsed']].values
+    features = ais_train[['latitude', 'longitude', 'sog', 'day_of_week', 'distance_to_nearest_port', 'anchored', 'vesselId_encoded', 'time_elapsed']].values
     target = ais_train[['latitude', 'longitude']].shift(-1).ffill().values
 
     # Normalize features
@@ -308,20 +308,10 @@ def build_model(input_shape: Tuple[int, int]) -> Sequential:
  
     model = Sequential()
     model.add(Input(shape=input_shape))  # Use Input layer to specify the shape
-    lstm = True
-    if lstm:
-        model.add(Bidirectional(LSTM(units=10, return_sequences=True)))
-        model.add(BatchNormalization())  # Batch normalization after the first LSTM layer
-        model.add(Dropout(0.2))
-        model.add(Bidirectional(LSTM(units=10)))
-        model.add(BatchNormalization())  # Batch normalization after the first LSTM layer
-        model.add(Dropout(0.2))
-    else:
-        model.add(GRU(units=100, return_sequences=True))
-        model.add(BatchNormalization())  # Batch normalization after the first LSTM layer
-        model.add(Dropout(0.2))
-        model.add(GRU(units=100))
-        model.add(BatchNormalization())  # Batch normalization after the first LSTM layer
+    model.add(LSTM(units=50, return_sequences=True))
+    model.add(Dropout(0.2))
+    model.add(LSTM(units=50))
+    model.add(Dropout(0.2))
     model.add(Dense(units=2))  # Output: latitude and longitude
     model.compile(optimizer='adam', loss=geodesic_loss)
     logger.info("Model built successfully.")
@@ -388,9 +378,23 @@ def generate_submission(model: Sequential, ais_test: pd.DataFrame, feature_scale
         'latitude_predicted': predictions[:, 0]
     })
    
-    # Clip predictions to valid latitude and longitude ranges
-    submission['latitude_predicted'] = submission['latitude_predicted'].clip(-90, 90)
-    submission['longitude_predicted'] = submission['longitude_predicted'].clip(-180, 180)
+    # # Function to wrap latitude values properly
+    # def wrap_latitude(lat):
+    #     # Continue wrapping while latitude is outside the range [-90, 90]
+    #     while lat > 90 or lat < -90:
+    #         if lat > 90:
+    #             lat = 180 - lat  # Reflect latitude if it goes beyond 90
+    #         elif lat < -90:
+    #             lat = -180 - lat  # Reflect latitude if it goes below -90
+    #     return lat
+    #
+    # # Function to wrap longitude values properly
+    # def wrap_longitude(lon):
+    #     return ((lon + 180) % 360) - 180  # Wrap longitude to range [-180, 180]
+    #
+    # # Apply the wrapping to predicted latitude and longitude values
+    # submission['latitude_predicted'] = submission['latitude_predicted'].apply(wrap_latitude)
+    # submission['longitude_predicted'] = submission['longitude_predicted'].apply(wrap_longitude)
 
     # Ensure that the submission file has exactly 51739 rows as required
     assert submission.shape[0] == 51739, "The submission file must have exactly 51739 rows."
