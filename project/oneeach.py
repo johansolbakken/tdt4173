@@ -165,8 +165,8 @@ def haversine_loss(y_true, y_pred):
 
 # Define the LSTM Model
 model = Sequential()
-model.add(LSTM(512, return_sequences=True, input_shape=(time_step, X_train.shape[2])))
-model.add(LSTM(128))
+model.add(LSTM(1024, return_sequences=True, input_shape=(time_step, X_train.shape[2])))
+model.add(LSTM(512))
 model.add(Dropout(0.2))
 model.add(Dense(y_train.shape[1]))
 
