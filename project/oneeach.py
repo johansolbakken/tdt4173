@@ -5,6 +5,7 @@ from sklearn.model_selection import train_test_split
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dropout, Dense
 from tensorflow.keras.callbacks import EarlyStopping
+import tensorflow.keras.backend as K
 import tensorflow as tf
 
 print("TensorFlow version:", tf.__version__)
@@ -132,19 +133,45 @@ X, y = create_sequences_per_vessel(ais_train_scaled, time_step)
 # Split into training and validation sets
 X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, shuffle=True)
 
+
+"""
+    Haversine loss
+"""
+def haversine_loss(y_true, y_pred):
+    R = 6371.0  # Earth radius in kilometers
+    pi_over_180 = K.constant(np.pi / 180.0, dtype='float64')
+
+    # Ensure the tensors are of type float64 for precision
+    lat_true = K.cast(y_true[:, 0], 'float64') * pi_over_180
+    lon_true = K.cast(y_true[:, 1], 'float64') * pi_over_180
+    lat_pred = K.cast(y_pred[:, 0], 'float64') * pi_over_180
+    lon_pred = K.cast(y_pred[:, 1], 'float64') * pi_over_180
+
+    # Compute differences
+    dlat = lat_pred - lat_true
+    dlon = lon_pred - lon_true
+
+    # Haversine formula
+    a = K.sin(dlat / 2)**2 + K.cos(lat_true) * K.cos(lat_pred) * K.sin(dlon / 2)**2
+    c = 2 * tf.atan2(K.sqrt(a), K.sqrt(1 - a))
+    distance = R * c
+
+    # Return mean distance over the batch
+    return K.mean(distance)
+
 """
     Define and Train the Model
 """
 
 # Define the LSTM Model
 model = Sequential()
-model.add(LSTM(1024, return_sequences=True, input_shape=(time_step, X_train.shape[2])))
-model.add(LSTM(512))
-model.add(Dropout(0.4))
+model.add(LSTM(512, return_sequences=True, input_shape=(time_step, X_train.shape[2])))
+model.add(LSTM(128))
+model.add(Dropout(0.2))
 model.add(Dense(y_train.shape[1]))
 
 # Compile the model
-model.compile(optimizer='adam', loss='mean_squared_error')
+model.compile(optimizer='adam', loss=haversine_loss)
 
 # Train the model
 early_stopping = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
