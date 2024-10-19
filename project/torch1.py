@@ -1,3 +1,4 @@
+
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import MinMaxScaler
@@ -7,6 +8,8 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import TensorDataset, DataLoader
 import copy
+from scipy.interpolate import CubicSpline
+from tqdm import tqdm
 
 print("PyTorch version:", torch.__version__)
 
@@ -31,9 +34,6 @@ ais_train = pd.read_csv("ais_train.csv", sep='|')
 # Temporal features
 ais_train['time'] = pd.to_datetime(ais_train['time'])
 ais_train['elapsed_time'] = (ais_train['time'] - pd.Timestamp("1970-01-01")) // pd.Timedelta('1s')
-ais_train['day_of_week'] = ais_train['time'].dt.dayofweek  # Monday=0, Sunday=6
-ais_train['hour_of_day'] = ais_train['time'].dt.hour
-ais_train = pd.get_dummies(ais_train, columns=['day_of_week', 'hour_of_day'], drop_first=True)
 
 # Filter out unrealistic speeds
 ais_train = ais_train[ais_train['sog'] < 25]
@@ -45,12 +45,6 @@ ais_train = ais_train[~((ais_train['navstat'] == 2) & (ais_train['sog'] > 5))]
 
 # One-hot encode 'navstat'
 ais_train = pd.get_dummies(ais_train, columns=['navstat'])
-
-# Split cyclic values into x and y
-ais_train['cog_sin'] = np.sin(np.radians(ais_train['cog']))
-ais_train['cog_cos'] = np.cos(np.radians(ais_train['cog']))
-ais_train['heading_sin'] = np.sin(np.radians(ais_train['heading']))
-ais_train['heading_cos'] = np.cos(np.radians(ais_train['heading']))
 
 # Merge with vessel data
 vessels = pd.read_csv("vessels.csv", sep='|')[['shippingLineId', 'vesselId']]
@@ -81,41 +75,178 @@ def calculate_bearing(lat1, lon1, lat2, lon2):
     initial_bearing = np.arctan2(x, y)
     return (np.degrees(initial_bearing) + 360) % 360
 
-# Calculate features
-print("Distance to port calculation")
-ais_train['distance_to_port'] = haversine_distance(
-    ais_train['latitude'], ais_train['longitude'],
-    ais_train['port_latitude'], ais_train['port_longitude']
-)
-print("Bearing to port calculation")
-ais_train['bearing_to_port'] = calculate_bearing(
-    ais_train['latitude'], ais_train['longitude'],
-    ais_train['port_latitude'], ais_train['port_longitude']
-)
+"""
+    Cubic Spline Interpolation for Each Vessel
+"""
 
-print("Done calculating")
+# List to store processed trajectories
+processed_trajectories = []
+
+# Group data by vesselId
+vessel_ids = ais_train['vesselId'].unique()
+for vessel_id in tqdm(vessel_ids, desc="Interpolating Vessels"):
+
+    vessel_data = ais_train[ais_train['vesselId'] == vessel_id].sort_values('elapsed_time')
+
+    # Ensure at least two data points
+    if len(vessel_data) < 2:
+        continue
+
+    # Prepare data for interpolation
+    times = vessel_data['elapsed_time'].values
+    latitudes = vessel_data['latitude'].values
+    longitudes = vessel_data['longitude'].values
+
+    # Remove duplicates in times
+    times, unique_indices = np.unique(times, return_index=True)
+    latitudes = latitudes[unique_indices]
+    longitudes = longitudes[unique_indices]
+
+    if len(times) < 2:
+        continue
+
+    # Convert lat/lon to radians
+    lat_rad = np.radians(latitudes)
+    lon_rad = np.radians(longitudes)
+
+    # Convert to 3D Cartesian coordinates
+    x = np.cos(lat_rad) * np.cos(lon_rad)
+    y = np.cos(lat_rad) * np.sin(lon_rad)
+    z = np.sin(lat_rad)
+
+    # Create new time points for interpolation (every hour)
+    start_time = times.min()
+    end_time = times.max()
+    new_times = np.arange(start_time, end_time + 1, 3600)  # Every hour in seconds
+    # Ensure new_times are within the original times
+    new_times = new_times[(new_times >= times.min()) & (new_times <= times.max())]
+
+    # Interpolate x, y, z using cubic splines
+    cs_x = CubicSpline(times, x)
+    cs_y = CubicSpline(times, y)
+    cs_z = CubicSpline(times, z)
+
+    x_interp = cs_x(new_times)
+    y_interp = cs_y(new_times)
+    z_interp = cs_z(new_times)
+
+    # Normalize to unit sphere
+    norm = np.sqrt(x_interp**2 + y_interp**2 + z_interp**2)
+    x_interp /= norm
+    y_interp /= norm
+    z_interp /= norm
+
+    # Convert back to lat/lon
+    lat_interp = np.degrees(np.arcsin(z_interp))
+    lon_interp = np.degrees(np.arctan2(y_interp, x_interp))
+
+    # Handle longitude wrap-around
+    lon_interp = (lon_interp + 360) % 360
+    # Adjust longitudes > 180 to negative values (from -180 to 180)
+    lon_interp[lon_interp > 180] -= 360
+
+    # Create interpolated DataFrame
+    interp_df = pd.DataFrame({
+        'vesselId': vessel_id,
+        'elapsed_time': new_times,
+        'latitude': lat_interp,
+        'longitude': lon_interp,
+    })
+
+    # Assign 'portId' using merge_asof
+    vessel_port_data = vessel_data[['elapsed_time', 'portId']].drop_duplicates().sort_values('elapsed_time')
+    interp_df = pd.merge_asof(
+        interp_df.sort_values('elapsed_time'),
+        vessel_port_data,
+        on='elapsed_time',
+        direction='nearest'
+    )
+
+    # Recalculate 'sog' and 'cog'
+    lat_prev = np.roll(lat_interp, 1)
+    lon_prev = np.roll(lon_interp, 1)
+    time_prev = np.roll(new_times, 1)
+    distances = haversine_distance(lat_prev, lon_prev, lat_interp, lon_interp)
+    time_diffs = (new_times - time_prev) / 3600  # Convert time difference to hours
+    time_diffs[0] = np.nan  # First element has no previous point
+    sog = distances / time_diffs  # Speed in knots
+    cog = calculate_bearing(lat_prev, lon_prev, lat_interp, lon_interp)
+    cog[0] = np.nan  # First element has no previous point
+
+    # Assign 'sog' and 'cog' to interp_df
+    interp_df['sog'] = sog
+    interp_df['cog'] = cog
+
+    # Drop the first row as it has NaN values
+    interp_df = interp_df.iloc[1:].reset_index(drop=True)
+
+    # Convert 'elapsed_time' back to 'time'
+    interp_df['time'] = pd.to_datetime(interp_df['elapsed_time'], unit='s')
+
+    # Append to processed_trajectories
+    processed_trajectories.append(interp_df)
+
+# Combine all interpolated data
+ais_train_interpolated = pd.concat(processed_trajectories, ignore_index=True)
+
+print("ais_train", len(ais_train))
+print("ais_train_interpolated", len(ais_train_interpolated))
+
+"""
+    Continue Preprocessing with Interpolated Data
+"""
+
+# Temporal features
+ais_train_interpolated['day_of_week'] = ais_train_interpolated['time'].dt.dayofweek
+ais_train_interpolated['hour_of_day'] = ais_train_interpolated['time'].dt.hour
+ais_train_interpolated = pd.get_dummies(ais_train_interpolated, columns=['day_of_week', 'hour_of_day'], drop_first=True)
+
+# Handle cyclic features for 'cog'
+ais_train_interpolated['cog_sin'] = np.sin(np.radians(ais_train_interpolated['cog']))
+ais_train_interpolated['cog_cos'] = np.cos(np.radians(ais_train_interpolated['cog']))
+
+# Merge with vessels and ports data
+ais_train_interpolated = pd.merge(ais_train_interpolated, vessels, on='vesselId', how='left')
+ais_train_interpolated = pd.merge(ais_train_interpolated, ports, on='portId', how='left')
+
+# Calculate 'distance_to_port' and 'bearing_to_port'
+ais_train_interpolated['distance_to_port'] = haversine_distance(
+    ais_train_interpolated['latitude'], ais_train_interpolated['longitude'],
+    ais_train_interpolated['port_latitude'], ais_train_interpolated['port_longitude']
+)
+ais_train_interpolated['bearing_to_port'] = calculate_bearing(
+    ais_train_interpolated['latitude'], ais_train_interpolated['longitude'],
+    ais_train_interpolated['port_latitude'], ais_train_interpolated['port_longitude']
+)
 
 # Define input and target features
-input_features = ['latitude', 'longitude', 'sog', 'cog_sin', 'cog_cos', 'heading_sin', 'heading_cos', 'elapsed_time']
-input_features.extend([col for col in ais_train.columns if 'day_of_week_' in col])
-input_features.extend([col for col in ais_train.columns if 'hour_of_day_' in col])
-navstat_columns = [col for col in ais_train.columns if col.startswith('navstat_')]
-input_features.extend(navstat_columns)
-input_features.extend(['distance_to_port', 'bearing_to_port'])
+input_features = [
+    'latitude', 'longitude', 'sog', 'cog_sin', 'cog_cos', 'elapsed_time',
+    'distance_to_port', 'bearing_to_port'
+]
+input_features.extend([col for col in ais_train_interpolated.columns if 'day_of_week_' in col])
+input_features.extend([col for col in ais_train_interpolated.columns if 'hour_of_day_' in col])
+
 target_columns = ['latitude', 'longitude']
 
 # Initialize scalers
 scaler_input = MinMaxScaler()
 scaler_output = MinMaxScaler()
 
+# Drop rows with NaN values in input features
+ais_train_interpolated = ais_train_interpolated.dropna(subset=input_features + target_columns)
+
 # Scale input and output features
-input_data = scaler_input.fit_transform(ais_train[input_features])
-output_data = scaler_output.fit_transform(ais_train[target_columns])
+input_data = scaler_input.fit_transform(ais_train_interpolated[input_features])
+output_data = scaler_output.fit_transform(ais_train_interpolated[target_columns])
 
 # Add scaled features back to DataFrame
-ais_train_scaled = ais_train.copy()
-ais_train_scaled[input_features] = input_data
-ais_train_scaled[target_columns] = output_data
+ais_train_interpolated[input_features] = input_data
+ais_train_interpolated[target_columns] = output_data
+
+"""
+    Create Sequences for Model Training
+"""
 
 # Function to create sequences per vessel
 def create_sequences_per_vessel(df, time_steps):
@@ -134,7 +265,7 @@ def create_sequences_per_vessel(df, time_steps):
 
 # Create sequences
 time_step = 10
-X, y = create_sequences_per_vessel(ais_train_scaled, time_step)
+X, y = create_sequences_per_vessel(ais_train_interpolated, time_step)
 
 # Split into training and validation sets
 X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, shuffle=True)
@@ -153,8 +284,9 @@ train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
 """
-    Haversine loss
+    Haversine Loss Function
 """
+
 def haversine_loss(y_true, y_pred):
     R = 6371.0  # Earth radius in kilometers
 
@@ -179,6 +311,7 @@ def haversine_loss(y_true, y_pred):
 """
     Define and Train the Model
 """
+
 class LSTMModel(nn.Module):
     def __init__(self, input_size, hidden_size1, hidden_size2, output_size):
         super(LSTMModel, self).__init__()
@@ -279,45 +412,59 @@ ais_test['hour_of_day'] = ais_test['time'].dt.hour
 # One-hot encode
 ais_test = pd.get_dummies(ais_test, columns=['day_of_week', 'hour_of_day'], drop_first=True)
 
+# Merge with vessels and ports data
+ais_test = pd.merge(ais_test, vessels, on='vesselId', how='left')
+ais_test = pd.merge(ais_test, ports, on='portId', how='left')
+
+# Calculate 'distance_to_port' and 'bearing_to_port' if possible
+ais_test['distance_to_port'] = haversine_distance(
+    ais_test['latitude'], ais_test['longitude'],
+    ais_test['port_latitude'], ais_test['port_longitude']
+)
+ais_test['bearing_to_port'] = calculate_bearing(
+    ais_test['latitude'], ais_test['longitude'],
+    ais_test['port_latitude'], ais_test['port_longitude']
+)
+
+# Handle cyclic features
+ais_test['cog_sin'] = np.sin(np.radians(ais_test['cog']))
+ais_test['cog_cos'] = np.cos(np.radians(ais_test['cog']))
+
 # Ensure all columns in ais_test match those in input_features
 for col in input_features:
     if col not in ais_test.columns:
         ais_test[col] = 0
 
-# Merge with last known positions from training data
-# Get the last 'time_step' records for each vessel from training data
-last_positions = ais_train_scaled.groupby('vesselId').apply(
-    lambda x: x.sort_values('elapsed_time').tail(time_step)
-)
-last_positions = last_positions.reset_index(drop=True)
+# Scale the test data using the same scaler
+input_data_test = scaler_input.transform(ais_test[input_features])
+ais_test_scaled = ais_test.copy()
+ais_test_scaled[input_features] = input_data_test
 
 # Prepare sequences for each vessel in the test set
-vessel_sequences = {}
-for vessel_id in ais_test['vesselId'].unique():
-    if vessel_id in last_positions['vesselId'].unique():
-        vessel_data = last_positions[last_positions['vesselId'] == vessel_id]
-        seq = vessel_data[input_features].values
-        if len(seq) < time_step:
+def create_sequences_for_test(df_train, df_test, time_steps):
+    X_test = []
+    for vessel_id in df_test['vesselId'].unique():
+        # Combine training and test data for the vessel
+        vessel_train_data = df_train[df_train['vesselId'] == vessel_id]
+        vessel_test_data = df_test[df_test['vesselId'] == vessel_id]
+        vessel_data = pd.concat([vessel_train_data, vessel_test_data], ignore_index=True)
+        vessel_data = vessel_data.sort_values('elapsed_time')
+        inputs = vessel_data[input_features].values
+        if len(inputs) >= time_steps:
+            seq = inputs[-time_steps:]
+            X_test.append(seq)
+        else:
             # Pad sequences if necessary
-            seq = np.pad(seq, ((time_step - len(seq), 0), (0, 0)), mode='constant')
-        vessel_sequences[vessel_id] = seq
-    else:
-        # If no data available, create a default sequence (e.g., zeros)
-        seq = np.zeros((time_step, len(input_features)))
-        vessel_sequences[vessel_id] = seq
+            seq = np.pad(inputs, ((time_steps - len(inputs), 0), (0, 0)), mode='constant')
+            X_test.append(seq)
+    return np.array(X_test)
 
-# Create test sequences
-X_test = []
-for idx, row in ais_test.iterrows():
-    vessel_id = row['vesselId']
-    seq = vessel_sequences[vessel_id]
-    X_test.append(seq)
-X_test = np.array(X_test)
+X_test = create_sequences_for_test(ais_train_interpolated, ais_test_scaled, time_step)
 
 # Convert to PyTorch tensor
 X_test = torch.from_numpy(X_test).float()
 
-# Create a TensorDataset and DataLoader for test data
+# Create a DataLoader for test data
 test_dataset = TensorDataset(X_test)
 test_loader = DataLoader(test_dataset, batch_size=128, shuffle=False)
 
