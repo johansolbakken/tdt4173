@@ -414,21 +414,6 @@ ais_test = pd.get_dummies(ais_test, columns=['day_of_week', 'hour_of_day'], drop
 
 # Merge with vessels and ports data
 ais_test = pd.merge(ais_test, vessels, on='vesselId', how='left')
-ais_test = pd.merge(ais_test, ports, on='portId', how='left')
-
-# Calculate 'distance_to_port' and 'bearing_to_port' if possible
-ais_test['distance_to_port'] = haversine_distance(
-    ais_test['latitude'], ais_test['longitude'],
-    ais_test['port_latitude'], ais_test['port_longitude']
-)
-ais_test['bearing_to_port'] = calculate_bearing(
-    ais_test['latitude'], ais_test['longitude'],
-    ais_test['port_latitude'], ais_test['port_longitude']
-)
-
-# Handle cyclic features
-ais_test['cog_sin'] = np.sin(np.radians(ais_test['cog']))
-ais_test['cog_cos'] = np.cos(np.radians(ais_test['cog']))
 
 # Ensure all columns in ais_test match those in input_features
 for col in input_features:
