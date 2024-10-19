@@ -268,7 +268,7 @@ model.load_state_dict(best_model_wts)
 """
 
 # Load test data
-ais_test = pd.read_csv("ais_test.csv", sep='|')
+ais_test = pd.read_csv("ais_test.csv")
 ais_test['time'] = pd.to_datetime(ais_test['time'])
 ais_test['elapsed_time'] = (ais_test['time'] - pd.Timestamp("1970-01-01")) // pd.Timedelta('1s')
 ais_test['new_id'] = ais_test['vesselId'].map(vessel_id_to_new_id)
@@ -357,3 +357,4 @@ submission_df.to_csv("submission.csv", index=False)
 # Display submission
 print(submission_df.head())
 print(f"Submission DataFrame shape: {submission_df.shape}")
+
