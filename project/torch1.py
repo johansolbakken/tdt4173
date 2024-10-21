@@ -30,6 +30,9 @@ else:
 # Read ais_train.csv
 ais_train = pd.read_csv("ais_train.csv", sep='|')
 
+
+vessel_mapping = {vessel: idx for idx, vessel in enumerate(ais_train['vesselId'].unique())}
+
 # Temporal features
 ais_train['time'] = pd.to_datetime(ais_train['time'])
 ais_train['elapsed_time'] = (ais_train['time'] - pd.Timestamp("1970-01-01")) // pd.Timedelta('1s')
@@ -218,10 +221,12 @@ ais_train_interpolated['bearing_to_port'] = calculate_bearing(
     ais_train_interpolated['port_latitude'], ais_train_interpolated['port_longitude']
 )
 
+ais_train_interpolated['vesselId'] = ais_train['vesselId'].map(vessel_mapping)
+
 # Define input and target features
 input_features = [
     'latitude', 'longitude', 'sog', 'cog_sin', 'cog_cos', 'elapsed_time',
-    'distance_to_port', 'bearing_to_port'
+    'distance_to_port', 'bearing_to_port', 'vesselId'
 ]
 input_features.extend([col for col in ais_train_interpolated.columns if 'day_of_week_' in col])
 input_features.extend([col for col in ais_train_interpolated.columns if 'hour_of_day_' in col])
@@ -405,6 +410,7 @@ ais_test['time'] = pd.to_datetime(ais_test['time'])
 ais_test['elapsed_time'] = (ais_test['time'] - pd.Timestamp("1970-01-01")) // pd.Timedelta('1s')
 ais_test['new_id'] = ais_test['vesselId'].map(vessel_id_to_new_id)
 
+ais_test['vesselId'] = ais_test['vesselId'].map(vessel_mapping)
 ais_test['day_of_week'] = ais_test['time'].dt.dayofweek
 ais_test['hour_of_day'] = ais_test['time'].dt.hour
 
