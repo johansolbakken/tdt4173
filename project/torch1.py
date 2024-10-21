@@ -427,23 +427,38 @@ ais_test_scaled[input_features] = input_data_test
 # Prepare sequences for each vessel in the test set
 def create_sequences_for_test(df_train, df_test, time_steps):
     X_test = []
-    for vessel_id in df_test['vesselId'].unique():
-        # Combine training and test data for the vessel
+    test_ids = []
+    for idx, row in df_test.iterrows():
+        vessel_id = row['vesselId']
+        current_time = row['elapsed_time']
+
+        # Get the historical data for this vessel up to the current_time
         vessel_train_data = df_train[df_train['vesselId'] == vessel_id]
         vessel_test_data = df_test[df_test['vesselId'] == vessel_id]
+
+        # Combine and sort
         vessel_data = pd.concat([vessel_train_data, vessel_test_data], ignore_index=True)
         vessel_data = vessel_data.sort_values('elapsed_time')
-        inputs = vessel_data[input_features].values
-        if len(inputs) >= time_steps:
-            seq = inputs[-time_steps:]
-            X_test.append(seq)
-        else:
-            # Pad sequences if necessary
-            seq = np.pad(inputs, ((time_steps - len(inputs), 0), (0, 0)), mode='constant')
-            X_test.append(seq)
-    return np.array(X_test)
 
-X_test = create_sequences_for_test(ais_train_interpolated, ais_test_scaled, time_step)
+        # Select data up to the current_time (excluding the current row)
+        historical_data = vessel_data[vessel_data['elapsed_time'] < current_time]
+
+        # Get the last 'time_steps' entries
+        historical_sequence = historical_data.tail(time_steps)[input_features].values
+
+        if len(historical_sequence) < time_steps:
+            # Pad with zeros if not enough historical data
+            padding = np.zeros((time_steps - len(historical_sequence), len(input_features)))
+            historical_sequence = np.vstack([padding, historical_sequence])
+
+        X_test.append(historical_sequence)
+        test_ids.append(row['ID'])  # Assuming 'ID' is unique per test row
+
+    return np.array(X_test), test_ids
+
+
+# Create sequences for each test row
+X_test, test_ids = create_sequences_for_test(ais_train_interpolated, ais_test_scaled, time_step)
 
 # Convert to PyTorch tensor
 X_test = torch.from_numpy(X_test).float()
@@ -468,13 +483,10 @@ y_pred = np.concatenate(predictions, axis=0)
 # Inverse transform predictions
 y_pred_inverse = scaler_output.inverse_transform(y_pred)
 
-"""
-    Prepare Submission File
-"""
 
 # Prepare submission
 submission_df = pd.DataFrame({
-    'ID': ais_test['ID'].values,
+    'ID': test_ids,
     'longitude_predicted': y_pred_inverse[:, target_columns.index('longitude')],
     'latitude_predicted': y_pred_inverse[:, target_columns.index('latitude')]
 })
@@ -489,3 +501,6 @@ submission_df.to_csv("submission.csv", index=False)
 print(submission_df.head())
 print(f"Submission DataFrame shape: {submission_df.shape}")
 
+print(f"Number of predictions: {len(y_pred_inverse)}")
+print(f"Number of test IDs: {len(test_ids)}")
+assert len(y_pred_inverse) == len(test_ids), "Mismatch between predictions and test IDs"
