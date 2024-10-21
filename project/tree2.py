@@ -6,6 +6,7 @@ import xgboost as xgb
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error
 from math import radians, cos, sin, sqrt, atan2
+from tqdm import tqdm
 
 # Function to calculate the Haversine distance between two points
 def haversine(lat1, lon1, lat2, lon2):
@@ -71,6 +72,8 @@ Index(['vesselId', 'shippingLineId', 'shippingLineName', 'arrivalDate',
 """
 schedules = pd.read_csv("schedules_to_may_2024.csv", sep="|")
 schedules['vesselId'] = schedules['vesselId'].map(vessel_mapping)
+schedules['sailingDate'] = pd.to_datetime(schedules['sailingDate']).dt.tz_localize(None)
+schedules['arrivalDate'] = pd.to_datetime(schedules['arrivalDate']).dt.tz_localize(None)
 schedules = schedules.dropna(subset=['portLatitude']) # drop nan values
 schedules = schedules.drop_duplicates() # many duplicate values
 
@@ -94,30 +97,39 @@ Index(['ID', 'vesselId', 'time', 'scaling_factor'], dtype='object')
 """
 ais_test = pd.read_csv("ais_test.csv") # sep=","
 
+if True:
+    ais_train = ais_train.sample(frac=1).head(int(len(ais_train) * 0.1))
+
 def create_features(df):
     df['vesselId'] = df['vesselId'].map(vessel_mapping)
 
     # Temporal features
-    df['time'] = pd.to_datetime(df['time'])
+    df['time'] = pd.to_datetime(df['time']).dt.tz_localize(None)  # Make 'time' timezone-naive
     df['elapsed_time'] = (df['time'] - pd.Timestamp("1970-01-01")) // pd.Timedelta('1s')
 
     # Merge
     df = pd.merge(df, vessels, on='vesselId', how='left')
     df = pd.merge(df, ports, left_on='homePort', right_on='portId', how='left')
 
-    df['distance_from_home'] = df.apply(
-        lambda row: haversine(row['portLat'], row['portLon'], row['portLat'], row['portLon']), axis=1)
+    df['destinationLat'] = 0.0
+    df['destinationLon'] = 0.0
 
-    # Define 'isHome' based on a threshold distance (e.g., within 10 km
-    home_radius_km = 10
-    df['isHome'] = np.where(df['distance_from_home'] <= home_radius_km, 1, 0)
+    for index, row in tqdm(df.iterrows(), total=df.shape[0], description="Calculating target port"):
+        vessel_schedule = schedules[(schedules['vesselId'] == row['vesselId']) &
+                                    (row['time'] >= schedules['sailingDate']) &
+                                    (row['time'] <= schedules['arrivalDate'])]
+
+        if not vessel_schedule.empty:
+            # Extract the first matching schedule
+            df.at[index, 'destinationLat'] = vessel_schedule.iloc[0]['portLatitude']
+            df.at[index, 'destinationLon'] = vessel_schedule.iloc[0]['portLongitude']
 
     return df
 
 ais_train = create_features(ais_train)
 ais_test = create_features(ais_test)
 
-features = ['elapsed_time', 'vesselId', 'isHome', 'distance_from_home']
+features = ['elapsed_time', 'vesselId', 'destinationLat', 'destinationLon']
 
 """
 Need to train then
