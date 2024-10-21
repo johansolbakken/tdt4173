@@ -1,10 +1,27 @@
 #!/usr/bin/env python3
 
 import pandas as pd
+import numpy as np
 import xgboost as xgb
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error
+from math import radians, cos, sin, sqrt, atan2
 
+# Function to calculate the Haversine distance between two points
+def haversine(lat1, lon1, lat2, lon2):
+    # Convert latitude and longitude from degrees to radians
+    lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
+
+    # Haversine formula
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
+    c = 2 * atan2(sqrt(a), sqrt(1 - a))
+
+    # Radius of Earth in kilometers (mean radius)
+    r = 6371.0
+    return r * c  # distance in kilometers
+ 
 """
 ais_train.csv:
 Index(['time', 'cog', 'sog', 'rot', 'heading', 'navstat', 'etaRaw', 'latitude',
@@ -51,7 +68,8 @@ Index(['shippingLineId', 'vesselId', 'CEU', 'DWT', 'GT', 'NT', 'vesselType',
       dtype='object')
 """
 vessels = pd.read_csv("vessels.csv", sep='|')
-
+vessels['vesselId'] = vessels['vesselId'].map(vessel_mapping)
+ais_train = pd.merge(ais_train, vessels, on='vesselId', how='left')
 
 """
 schedules_to_may_2024.csv
@@ -76,6 +94,16 @@ ports = ports.drop('UN_LOCODE', axis=1)
 ports = ports.drop('countryName', axis=1)
 ports = ports.drop('ISO', axis=1)
 ports = ports.drop('name', axis=1)
+ports = ports.rename(columns={'longitude': 'portLon', 'latitude': 'portLat'})
+ais_train = pd.merge(ais_train, ports, left_on='homePort', right_on='portId', how='left')
+
+ais_train['distance_from_home'] = ais_train.apply(
+    lambda row: haversine(row['latitude'], row['longitude'], row['portLat'], row['portLon']), axis=1)
+
+# Define 'isHome' based on a threshold distance (e.g., within 10 km)
+home_radius_km = 10
+ais_train['isHome'] = np.where(ais_train['distance_from_home'] <= home_radius_km, 1, 0)
+
 
 """
 ais_test.csv
@@ -88,10 +116,19 @@ ais_test['vesselId'] = ais_test['vesselId'].map(vessel_mapping)
 ais_test['time'] = pd.to_datetime(ais_test['time'])
 ais_test['elapsed_time'] = (ais_test['time'] - pd.Timestamp("1970-01-01")) // pd.Timedelta('1s')
 
+ais_test = pd.merge(ais_test, vessels, on='vesselId', how='left')
+ais_test = pd.merge(ais_test, ports, left_on='homePort', right_on='portId', how='left')
+
+ais_test['distance_from_home'] = ais_test.apply(
+    lambda row: haversine(row['portLat'], row['portLon'], row['portLat'], row['portLon']), axis=1)
+
+# Define 'isHome' based on a threshold distance (e.g., within 10 km)
+ais_test['isHome'] = np.where(ais_test['distance_from_home'] <= home_radius_km, 1, 0)
+
 """
 Need to train then
 """
-X = ais_train[['elapsed_time', 'vesselId']]
+X = ais_train[['elapsed_time', 'vesselId', 'isHome', 'distance_from_home']]
 y_latitude = ais_train['latitude']
 y_longitude = ais_train['longitude']
 
@@ -126,8 +163,8 @@ bst_lon = xgb.train(params, dtrain_lon, num_boost_round=100,
                     evals=[(dval_lon, 'eval')], early_stopping_rounds=10)
 
 # Make predictions
-lat_predictions = bst_lat.predict(xgb.DMatrix(ais_test[['elapsed_time', 'vesselId']]))
-lon_predictions = bst_lon.predict(xgb.DMatrix(ais_test[['elapsed_time', 'vesselId']]))
+lat_predictions = bst_lat.predict(xgb.DMatrix(ais_test[['elapsed_time', 'vesselId', 'isHome', 'distance_from_home']]))
+lon_predictions = bst_lon.predict(xgb.DMatrix(ais_test[['elapsed_time', 'vesselId', 'isHome', 'distance_from_home']]))
 
 # Prepare the submission file
 submission = pd.DataFrame({
