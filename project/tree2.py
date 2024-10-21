@@ -29,8 +29,9 @@ Index(['time', 'cog', 'sog', 'rot', 'heading', 'navstat', 'etaRaw', 'latitude',
        'longitude', 'vesselId', 'portId', 'elapsed_time'], dtype='object')
 """
 ais_train = pd.read_csv("ais_train.csv", sep="|")
+ais_train = ais_train.rename(columns={'portId': 'maybePortId'})
 
-ais_train = ais_train.drop('portId', axis=1) # can be misleading
+# ais_train = ais_train.drop('portId', axis=1) # can be misleading
 
 # map vessel ids
 vessel_mapping = {vessel: idx for idx, vessel in enumerate(ais_train['vesselId'].unique())}
@@ -97,7 +98,7 @@ Index(['ID', 'vesselId', 'time', 'scaling_factor'], dtype='object')
 """
 ais_test = pd.read_csv("ais_test.csv") # sep=","
 
-if True:
+if False:
     ais_train = ais_train.sample(frac=1).head(int(len(ais_train) * 0.1))
 
 def create_features(df):
@@ -113,23 +114,68 @@ def create_features(df):
 
     df['destinationLat'] = 0.0
     df['destinationLon'] = 0.0
+    df['progress'] = 0.0
+    df['fieldsEnabled'] = False
 
-    for index, row in tqdm(df.iterrows(), total=df.shape[0], description="Calculating target port"):
+    for index, row in tqdm(df.iterrows(), total=df.shape[0], desc="Calculating target port"):
         vessel_schedule = schedules[(schedules['vesselId'] == row['vesselId']) &
                                     (row['time'] >= schedules['sailingDate']) &
                                     (row['time'] <= schedules['arrivalDate'])]
 
         if not vessel_schedule.empty:
             # Extract the first matching schedule
+            sailing_date = vessel_schedule.iloc[0]['sailingDate']
+            arrival_date = vessel_schedule.iloc[0]['arrivalDate']
+            total_trip_time = (arrival_date - sailing_date).total_seconds()
+
+            # Update destination coordinates
             df.at[index, 'destinationLat'] = vessel_schedule.iloc[0]['portLatitude']
             df.at[index, 'destinationLon'] = vessel_schedule.iloc[0]['portLongitude']
 
+            # Calculate elapsed time for the trip
+            elapsed_trip_time = (row['time'] - sailing_date).total_seconds()
+            df['fieldsEnabled'] = True
+
+            # Calculate progress
+            if total_trip_time > 0:
+                df.at[index, 'progress'] = max(0, min(1, elapsed_trip_time / total_trip_time))
+            else:
+                df.at[index, 'progress'] = 0.0  # Handle edge case where total_trip_time is 0
+        else:
+            df['progress'] = -1.0
+            df['fieldsEnabled'] = False
     return df
 
 ais_train = create_features(ais_train)
 ais_test = create_features(ais_test)
 
-features = ['elapsed_time', 'vesselId', 'destinationLat', 'destinationLon']
+def calculate_statistics(df):
+    stats = {}
+
+    for col in ['progress', 'destinationLat', 'destinationLon']:
+        stats[col] = {
+            'mean': df[col].mean(),
+            'min': df[col].min(),
+            'max': df[col].max(),
+            'percent_zero': (df[col] == 0.0).mean() * 100  # Percentage of 0.0 values
+        }
+
+    return stats
+
+# Apply the function to ais_train or ais_test, depending on the dataset you want to analyze
+train_stats = calculate_statistics(ais_train)
+test_stats = calculate_statistics(ais_test)
+
+# Display results
+print("Train Data Statistics:")
+for key, value in train_stats.items():
+    print(f"{key}: {value}")
+
+print("\nTest Data Statistics:")
+for key, value in test_stats.items():
+    print(f"{key}: {value}")
+
+features = ['elapsed_time', 'vesselId', 'destinationLat', 'destinationLon', 'progress', 'fieldsEnabled']
 
 """
 Need to train then
