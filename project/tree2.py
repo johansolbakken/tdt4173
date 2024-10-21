@@ -33,7 +33,6 @@ ais_train = ais_train.drop('portId', axis=1) # can be misleading
 
 # map vessel ids
 vessel_mapping = {vessel: idx for idx, vessel in enumerate(ais_train['vesselId'].unique())}
-ais_train['vesselId'] = ais_train['vesselId'].map(vessel_mapping)
 
 ais_train = ais_train[ais_train['cog']!=360] # cog=360 is not available
 ais_train = ais_train[(ais_train['cog'] <= 360) | (ais_train['cog'] > 409.5)] # this range should not be used
@@ -46,12 +45,6 @@ ais_train.loc[ais_train['rot'] == 128, 'turning'] = 0
 ais_train.loc[ais_train['rot'] == -128, 'turning'] = 0
 
 ais_train = ais_train[ais_train['heading'] != 511] # unavailable
-
-# Temporal features
-ais_train['time'] = pd.to_datetime(ais_train['time'])
-ais_train['elapsed_time'] = (ais_train['time'] - pd.Timestamp("1970-01-01")) // pd.Timedelta('1s')
-
-# Filter out unrealistic speeds
 ais_train = ais_train[ais_train['sog'] < 25]
 
 # Map 'navstat' values
@@ -69,7 +62,6 @@ Index(['shippingLineId', 'vesselId', 'CEU', 'DWT', 'GT', 'NT', 'vesselType',
 """
 vessels = pd.read_csv("vessels.csv", sep='|')
 vessels['vesselId'] = vessels['vesselId'].map(vessel_mapping)
-ais_train = pd.merge(ais_train, vessels, on='vesselId', how='left')
 
 """
 schedules_to_may_2024.csv
@@ -95,40 +87,42 @@ ports = ports.drop('countryName', axis=1)
 ports = ports.drop('ISO', axis=1)
 ports = ports.drop('name', axis=1)
 ports = ports.rename(columns={'longitude': 'portLon', 'latitude': 'portLat'})
-ais_train = pd.merge(ais_train, ports, left_on='homePort', right_on='portId', how='left')
-
-ais_train['distance_from_home'] = ais_train.apply(
-    lambda row: haversine(row['latitude'], row['longitude'], row['portLat'], row['portLon']), axis=1)
-
-# Define 'isHome' based on a threshold distance (e.g., within 10 km)
-home_radius_km = 10
-ais_train['isHome'] = np.where(ais_train['distance_from_home'] <= home_radius_km, 1, 0)
-
 
 """
 ais_test.csv
 Index(['ID', 'vesselId', 'time', 'scaling_factor'], dtype='object')
 """
 ais_test = pd.read_csv("ais_test.csv") # sep=","
-ais_test['vesselId'] = ais_test['vesselId'].map(vessel_mapping)
 
-# Temporal features
-ais_test['time'] = pd.to_datetime(ais_test['time'])
-ais_test['elapsed_time'] = (ais_test['time'] - pd.Timestamp("1970-01-01")) // pd.Timedelta('1s')
+def create_features(df):
+    df['vesselId'] = df['vesselId'].map(vessel_mapping)
 
-ais_test = pd.merge(ais_test, vessels, on='vesselId', how='left')
-ais_test = pd.merge(ais_test, ports, left_on='homePort', right_on='portId', how='left')
+    # Temporal features
+    df['time'] = pd.to_datetime(df['time'])
+    df['elapsed_time'] = (df['time'] - pd.Timestamp("1970-01-01")) // pd.Timedelta('1s')
 
-ais_test['distance_from_home'] = ais_test.apply(
-    lambda row: haversine(row['portLat'], row['portLon'], row['portLat'], row['portLon']), axis=1)
+    # Merge
+    df = pd.merge(df, vessels, on='vesselId', how='left')
+    df = pd.merge(df, ports, left_on='homePort', right_on='portId', how='left')
 
-# Define 'isHome' based on a threshold distance (e.g., within 10 km)
-ais_test['isHome'] = np.where(ais_test['distance_from_home'] <= home_radius_km, 1, 0)
+    df['distance_from_home'] = df.apply(
+        lambda row: haversine(row['portLat'], row['portLon'], row['portLat'], row['portLon']), axis=1)
+
+    # Define 'isHome' based on a threshold distance (e.g., within 10 km
+    home_radius_km = 10
+    df['isHome'] = np.where(df['distance_from_home'] <= home_radius_km, 1, 0)
+
+    return df
+
+ais_train = create_features(ais_train)
+ais_test = create_features(ais_test)
+
+features = ['elapsed_time', 'vesselId', 'isHome', 'distance_from_home']
 
 """
 Need to train then
 """
-X = ais_train[['elapsed_time', 'vesselId', 'isHome', 'distance_from_home']]
+X = ais_train[features]
 y_latitude = ais_train['latitude']
 y_longitude = ais_train['longitude']
 
@@ -163,8 +157,8 @@ bst_lon = xgb.train(params, dtrain_lon, num_boost_round=100,
                     evals=[(dval_lon, 'eval')], early_stopping_rounds=10)
 
 # Make predictions
-lat_predictions = bst_lat.predict(xgb.DMatrix(ais_test[['elapsed_time', 'vesselId', 'isHome', 'distance_from_home']]))
-lon_predictions = bst_lon.predict(xgb.DMatrix(ais_test[['elapsed_time', 'vesselId', 'isHome', 'distance_from_home']]))
+lat_predictions = bst_lat.predict(xgb.DMatrix(ais_test[features]))
+lon_predictions = bst_lon.predict(xgb.DMatrix(ais_test[features]))
 
 # Prepare the submission file
 submission = pd.DataFrame({
