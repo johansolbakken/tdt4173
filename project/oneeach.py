@@ -90,7 +90,7 @@ ais_train['bearing_to_port'] = calculate_bearing(
 print("done calculating")
 
 # Define input and target features
-input_features = ['latitude', 'longitude', 'sog', 'cog', 'heading', 'elapsed_time']
+input_features = ['latitude', 'longitude', 'sog', 'cog', 'heading', 'elapsed_time', 'vesselId']
 input_features.extend([col for col in ais_train.columns if 'day_of_week_' in col])
 input_features.extend([col for col in ais_train.columns if 'hour_of_day_' in col])
 navstat_columns = [col for col in ais_train.columns if col.startswith('navstat_')]
