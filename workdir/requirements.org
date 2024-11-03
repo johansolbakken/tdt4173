@@ -1,0 +1,123 @@
+#+title: Requirements
+
+Here is a compressed list of requirements based on the documents you've provided:
+
+### **Objective**
+- Predict future vessel positions based on AIS (Automatic Identification System) data from 1st January to 7th May 2024.
+- Forecast positions five days into the future at given timestamps for 216 vessels.
+
+### **Datasets**
+1. **Mandatory Datasets:**
+   - **ais_train.csv:** Contains AIS data for 689 vessels, sampled every 20 minutes (irregular timestamps).
+   - **ais_test.csv:** Test data without longitudes and latitudes for 216 vessels, used for evaluation.
+   - **ais_sample_submission.csv:** Demo submission to Kaggle predicting all zeroes.
+
+2. **Optional Datasets:**
+   - **schedules_to_may_2024.csv:** Contains planned vessel arrival and departure times for 252 vessels.
+   - **ports.csv:** Provides information on ports.
+   - **vessels.csv:** Contains additional details about each vessel, such as type, size, and capacity.
+
+### **File Descriptions**
+- **readme.txt:** Instructions for the dataset.
+- **Dataset definitions and explanation.docx:** Detailed document explaining the dataset and column names.
+- **Machine learning task for TDT4173.docx:** Brief introduction to the task.
+- **vessel_trajectories_visualization.ipynb:** A utility function to visualize vessel trajectories.
+- **kaggle_metric.ipynb:** Contains the score function used for evaluating predictions.
+
+### **AIS Data Variables**
+1. **Core Data Elements:**
+   - **TIME:** Timestamp of the recorded AIS data.
+   - **COG (Course Over Ground):** Vessel's actual trajectory.
+   - **SOG (Speed Over Ground):** Vessel’s speed relative to the ground.
+   - **ROT (Rate of Turn):** Speed at which the vessel changes its heading.
+   - **HEADING:** Direction of the vessel's bow.
+   - **NAVSTAT (Navigational Status):** Current operational state of the vessel.
+
+2. **Location Data:**
+   - **LATITUDE:** North-south position.
+   - **LONGITUDE:** East-west position.
+   - **vesselId:** Unique vessel identifier for linking with other datasets.
+   - **portId:** Unique identifier for ports; set manually by captains, potentially leading to inconsistencies.
+
+### **Vessel Data Elements**
+- **shippingLineId:** Unique identifier for shipping lines.
+- **CEU (Car Equivalent Unit):** Cargo capacity in car units.
+- **DWT (Deadweight Tonnage):** Vessel's carrying capacity in metric tons.
+- **GT (Gross Tonnage):** Vessel’s internal volume.
+- **NT (Net Tonnage):** Usable volume of the vessel.
+- **vesselType, breadth, depth, draft, length:** Various vessel dimensions.
+
+### **Ports and Schedule Data**
+- **portId, name, location, latitude, longitude, UN_LOCODE, countryName, ISO code.**
+- **Schedule Data:** Includes arrival and departure times for vessels at ports, with optional columns for port location, latitude, and longitude.
+
+### **Machine Learning Task**
+- **Objective:** Predict vessel positions at given timestamps using AIS data for 216 vessels from January to May 2024.
+- **Optional Datasets:** Vessels, schedules, and ports datasets.
+- **Evaluation Metric:** Weighted mean geodetic distance (km) between predicted and ground truth positions using geopy.distance.geodesic.
+  - Weights:
+    - 0-1 day: 0.3
+    - 1-2 days: 0.25
+    - 2-3 days: 0.2
+    - 3-4 days: 0.15
+    - 4-5 days: 0.1
+- **Submission Format:** Predict longitude and latitude for each row in the test set.
+  - Submission columns: `ID`, `longitude_predicted`, `latitude_predicted`
+
+### **Evaluation Process**
+- 50% of the test data is used for the public leaderboard, and 50% is used for the final private leaderboard.
+
+### VERY IMPORTANT
+The ais_test file does only contain ID, vesselId and time. This needs to be in the back of our heads every time.
+
+Overview
+In this project you will predict future shipping vessel positions from AIS data.
+
+Start
+
+a month ago
+Close
+18 days to go
+Description
+AIS (Automatic Identification System) data provides real-time information about a vessel's position, speed, and course, among others. AIS is essential for navigation and collision avoidance, maritime traffic monitoring, and environmental protection.
+
+Objective: Given AIS data from 1st January to 7th May 2024, predict the future positions of vessels at given timestamps for five days into the future.
+
+Evaluation
+The evaluation section describes how submissions will be scored and how participants should format their submissions.
+
+The evaluation metric is the weighted average of the mean geodetic distance in killometer (using geopy.distance.geodesic) between the prediction and the ground truth point for each vessel. The average is weighted per day into the future. The weights are as follows:
+
+0 - 1 day: 0.30
+1 - 2 days: 0.25
+2 - 3 days: 0.2
+3 - 4 days: 0.15
+4 - 5 days: 0.1
+The leaderboard is calculated with approximately 50% of the test data. The final results will be based on the other 50%.
+
+Submission File
+For each row in the test set predict longitude and latitude:
+
+ID, longitude_predicted, latitude_predicted
+0, 81, 73
+1, -16, 22
+2, 32, -7
+etc.
+
+# Your task
+- You are now an expert machine learning engineer.
+- You will reason about every choice you make.
+- You will will provide me with jupyter notebook cells.
+- When you provide me with a jupyter notebook cell, provide the entire cell and
+  be explicit with which cell you are changing.
+- The cells must be:
+  - Data lodaing and cleaning
+  - Feature Engineering
+  - Train split
+  - Model training
+  - Submission genereation
+- Your task is to take the set of requirements and get as low score as possible on Kaggle.
+- You need to tell me what information you need and provide the scripts so that I can provide you with information.
+- Then, you will build models that I will test.
+- I will provide error messages and results of your inquiries, and you will use them to reason for the best course of action.
+- We must make small changes at every step.

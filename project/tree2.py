@@ -29,22 +29,20 @@ Index(['time', 'cog', 'sog', 'rot', 'heading', 'navstat', 'etaRaw', 'latitude',
        'longitude', 'vesselId', 'portId', 'elapsed_time'], dtype='object')
 """
 ais_train = pd.read_csv("ais_train.csv", sep="|")
-ais_train = ais_train.rename(columns={'portId': 'maybePortId'})
+ais_train['time'] = pd.to_datetime(ais_train['time']).dt.tz_localize(None)  # Make 'time' timezone-naive
+print("Describe ais_train.csv")
+print(ais_train.describe())
 
-# ais_train = ais_train.drop('portId', axis=1) # can be misleading
+import seaborn as sns
+sns.heatmap(ais_train.isnull(), cbar=False)
+
+ais_train = ais_train.rename(columns={'portId': 'maybePortId'})
 
 # map vessel ids
 vessel_mapping = {vessel: idx for idx, vessel in enumerate(ais_train['vesselId'].unique())}
 
 ais_train = ais_train[ais_train['cog']!=360] # cog=360 is not available
 ais_train = ais_train[(ais_train['cog'] <= 360) | (ais_train['cog'] > 409.5)] # this range should not be used
-
-# The 'turning' column (-1=left, 1=right, 0=no turning)
-ais_train['turning'] = 0
-ais_train.loc[ais_train['rot'] < 0, 'turning'] = -1
-ais_train.loc[ais_train['rot'] >= 0, 'turning'] = 1
-ais_train.loc[ais_train['rot'] == 128, 'turning'] = 0
-ais_train.loc[ais_train['rot'] == -128, 'turning'] = 0
 
 ais_train = ais_train[ais_train['heading'] != 511] # unavailable
 ais_train = ais_train[ais_train['sog'] < 25]
@@ -53,6 +51,9 @@ ais_train = ais_train[ais_train['sog'] < 25]
 ais_train['navstat'] = ais_train['navstat'].replace(8, 0)  # Under way sailing -> Under way using engine
 ais_train = ais_train[~((ais_train['navstat'].isin([1, 5])) & (ais_train['sog'] > 0))]
 ais_train = ais_train[~((ais_train['navstat'] == 2) & (ais_train['sog'] > 5))]
+
+print("Describe ais_train.csv after pruning")
+print(ais_train.describe())
 
 """
 vessels.csv
@@ -63,6 +64,8 @@ Index(['shippingLineId', 'vesselId', 'CEU', 'DWT', 'GT', 'NT', 'vesselType',
       dtype='object')
 """
 vessels = pd.read_csv("vessels.csv", sep='|')
+print("Describe vessel.csv")
+print(vessels.describe())
 vessels['vesselId'] = vessels['vesselId'].map(vessel_mapping)
 
 """
@@ -72,6 +75,8 @@ Index(['vesselId', 'shippingLineId', 'shippingLineName', 'arrivalDate',
       dtype='object')
 """
 schedules = pd.read_csv("schedules_to_may_2024.csv", sep="|")
+print("Describe schedules_to_may_2024.csv")
+print(schedules.describe())
 schedules['vesselId'] = schedules['vesselId'].map(vessel_mapping)
 schedules['sailingDate'] = pd.to_datetime(schedules['sailingDate']).dt.tz_localize(None)
 schedules['arrivalDate'] = pd.to_datetime(schedules['arrivalDate']).dt.tz_localize(None)
@@ -85,6 +90,8 @@ Index(['portId', 'name', 'portLocation', 'longitude', 'latitude', 'UN_LOCODE',
       dtype='object')
 """
 ports = pd.read_csv('ports.csv', sep='|')
+print("Describe ports.csv")
+print(ports.describe())
 ports = ports.drop('portLocation', axis=1)
 ports = ports.drop('UN_LOCODE', axis=1)
 ports = ports.drop('countryName', axis=1)
@@ -97,6 +104,9 @@ ais_test.csv
 Index(['ID', 'vesselId', 'time', 'scaling_factor'], dtype='object')
 """
 ais_test = pd.read_csv("ais_test.csv") # sep=","
+ais_test['time'] = pd.to_datetime(ais_test['time']).dt.tz_localize(None)  # Make 'time' timezone-naive
+print("Describe ais_test.csv")
+print(ais_test.describe())
 
 if False:
     ais_train = ais_train.sample(frac=1).head(int(len(ais_train) * 0.1))
@@ -145,6 +155,8 @@ def create_features(df):
             df['progress'] = -1.0
             df['fieldsEnabled'] = False
     return df
+
+
 
 ais_train = create_features(ais_train)
 ais_test = create_features(ais_test)
